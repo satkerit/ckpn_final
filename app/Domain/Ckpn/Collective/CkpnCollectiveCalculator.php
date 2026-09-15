@@ -1,0 +1,225 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Ckpn\Collective;
+
+use App\Enums\ClassificationType;
+use App\Enums\UsageType;
+use App\Models\CkpnPeriodClassification;
+use App\Models\LgdFinalResult;
+use App\Models\PdMigrationResult;
+use App\Models\PdNetflowResult;
+
+/**
+ * Calculates CKPN Collective per account: CKPN = PD x LGD x EAD.
+ * Ref: PRD Bab 11
+ *
+ * PD selection: 'netflow' | 'migration' (per kebijakan segmen, dikonfigurasi via parameter)
+ * LGD: diambil dari snapshot lgd_final_result (gabungan ER + CS) per segmen — Ref: PRD Bab 11
+ * EAD = outstanding balance periode perhitungan
+ *
+ * Ref PRD Bab 12: kombinasi PD/LGD belum final — sistem dibangun fleksibel.
+ * TODO(PRD Bab 12.3): konfirmasi skema kombinasi PD akhir (primary method per segmen vs weighted avg)
+ */
+final class CkpnCollectiveCalculator
+{
+    public function __construct(
+        /** 'netflow' | 'migration' — PD method yang dipakai untuk segmen ini */
+        private readonly string $pdMethod,
+    ) {}
+
+    /**
+     * Hitung CKPN Kolektif per akun untuk satu segmen dan periode.
+     * Ref: PRD Bab 11
+     *
+     * Formula per akun:
+     *   CKPN = PD × LGD × EAD
+     *   EAD  = outstanding_balance periode perhitungan
+     *   PD   = pd_rate dari snapshot (netflow atau migration, tergantung $pdMethod)
+     *   LGD  = lgd_final_rate dari snapshot lgd_final_results per segmen
+     *
+     * Kriteria akun yang diproses:
+     *   - Masuk klasifikasi Collective di tabel ckpn_period_classifications untuk periode ini
+     *   - Segmen (usage_type) sesuai parameter
+     *   - Snapshot LGD Final harus sudah tersedia (lihat LgdFinalCalculator)
+     *
+     * Pemilihan PD rate per akun:
+     *   - PD netflow  : dipilih berdasarkan bucket_id yang dipetakan dari collectibility akun
+     *   - PD migration: dipilih berdasarkan quality_grade_id yang dipetakan dari collectibility akun
+     *   - Jika tidak ada mapping yang cocok → gunakan rata-rata semua PD rates segmen (fallback)
+     *
+     * Prasyarat (harus dikerjakan sebelum job ini):
+     *   1. ClassifyAccounts — mengisi ckpn_period_classifications
+     *   2. CalculatePdNetflow atau CalculatePdMigration — mengisi snapshot PD
+     *   3. CalculateLgdFinal — mengisi snapshot lgd_final_results
+     *
+     * TODO(PRD Bab 12.3): konfirmasi skema kombinasi PD akhir (primary method per segmen vs weighted avg)
+     *
+     * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
+     * @return array<int, array{
+     *   financing_account_id: int,
+     *   usage_type: string,
+     *   pd_method_used: string,
+     *   pd_rate: float,
+     *   lgd_method_used: string,
+     *   lgd_rate: float,
+     *   ead: float,
+     *   ckpn_amount: float,
+     * }>
+     */
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod): array
+    {
+        // FIX: Ambil data langsung dari ckpn_period_classifications agar konsisten dengan rekonsiliasi
+        // Sumber data harus SAMA dengan yang digunakan saat klasifikasi — Ref: PRD Bab 11
+        $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
+            ->where('classification', ClassificationType::Collective->value)
+            ->whereHas('financingAccount', function ($q) use ($usageType) {
+                $q->where('usage_type', $usageType->value);
+            })
+            ->with('financingAccount')
+            ->get();
+
+        if ($stagingAccounts->isEmpty()) {
+            return [];
+        }
+
+        // Resolve PD rates untuk segmen (per bucket/kualitas, diambil dari snapshot terbaru)
+        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod);
+
+        // Resolve LGD Final rate dari snapshot lgd_final_result (gabungan ER + CS) per segmen
+        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod);
+        $lgdMethod = 'lgd_final';
+
+        $results = [];
+
+        foreach ($stagingAccounts as $staging) {
+            $outstanding = (float) $staging->outstanding_balance;
+            $collectibility = (int) $staging->collectibility;
+
+            // PD selection: gunakan bucket/quality-grade dari collectibility mapping
+            // Fallback ke PD rata-rata segmen jika tidak ada mapping langsung
+            [$pdRate, $bucketIdUsed, $qualityGradeIdUsed] = $this->selectPdRate($pdRates, $collectibility);
+
+            // EAD = Baki Debet periode ini
+            $ead = $outstanding;
+
+            // Formula: CKPN = PD x LGD x EAD
+            $ckpnAmount = $pdRate * $lgdRate * $ead;
+
+            $results[] = [
+                'financing_account_id' => $staging->financingAccount->id,
+                'usage_type' => $usageType->value,
+                'pd_method_used' => $this->pdMethod,
+                'pd_rate' => $pdRate,
+                'lgd_method_used' => $lgdMethod,
+                'lgd_rate' => $lgdRate,
+                'ead' => $ead,
+                // Bucket (netflow) atau quality grade (migration) yang dipakai untuk memilih PD rate
+                'pd_bucket_id' => $bucketIdUsed,
+                'pd_quality_grade_id' => $qualityGradeIdUsed,
+                'ckpn_amount' => $ckpnAmount,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
+     * Muat PD rates dari snapshot terbaru untuk satu segmen dan periode.
+     * Ref: PRD Bab 7 (Netflow) / Bab 8 (Migration)
+     *
+     * Berdasarkan $pdMethod yang dikonfigurasi saat konstruksi:
+     *   - 'netflow'   → ambil dari pd_netflow_results, key = from_bucket_id (1–14)
+     *   - 'migration' → ambil dari pd_migration_results, key = from_quality_grade_id (1–5)
+     *
+     * Hasil digunakan oleh calculatePerAccount() untuk memetakan collectibility akun
+     * ke PD rate yang paling relevan via selectPdRate().
+     *
+     * @param  string  $calculationPeriod  Format yyyymm
+     * @return array<int, float> key = bucket_id (netflow) atau quality_grade_id (migration), value = pd_rate
+     */
+    private function resolvePdRates(UsageType $usageType, string $calculationPeriod): array
+    {
+        if ($this->pdMethod === 'netflow') {
+            return PdNetflowResult::where('usage_type', $usageType->value)
+                ->where('calculation_period', $calculationPeriod)
+                ->pluck('pd_rate', 'from_bucket_id')
+                ->map(fn ($v) => (float) $v)
+                ->all();
+        }
+
+        // migration
+        return PdMigrationResult::where('usage_type', $usageType->value)
+            ->where('calculation_period', $calculationPeriod)
+            ->pluck('pd_rate', 'from_quality_grade_id')
+            ->map(fn ($v) => (float) $v)
+            ->all();
+    }
+
+    /**
+     * Ambil LGD Final rate dari snapshot lgd_final_results untuk satu segmen.
+     * Ref: PRD Bab 11
+     *
+     * Rate ini merupakan gabungan LGD ER + LGD CS yang sudah dihitung oleh LgdFinalCalculator.
+     * Satu nilai rate berlaku untuk seluruh akun dalam segmen yang sama di periode yang sama.
+     *
+     * Prasyarat: job CalculateLgdFinal harus sudah selesai untuk periode ini.
+     *
+     * @param  string  $calculationPeriod  Format yyyymm
+     * @return float LGD Final rate (0.0–1.0)
+     *
+     * @throws \RuntimeException jika snapshot tidak ditemukan.
+     */
+    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod): float
+    {
+        $rate = LgdFinalResult::where('usage_type', $usageType->value)
+            ->where('calculation_period', $calculationPeriod)
+            ->value('lgd_final_rate');
+
+        if ($rate === null) {
+            throw new \RuntimeException(
+                "Snapshot LGD Final untuk segmen {$usageType->label()} periode {$calculationPeriod} belum tersedia. "
+                    .'Jalankan perhitungan LGD Final terlebih dahulu.',
+            );
+        }
+
+        return (float) $rate;
+    }
+
+    /**
+     * Pilih PD rate yang paling relevan berdasarkan collectibility akun.
+     * Ref: PRD Bab 7 (Netflow) / Bab 8 (Migration)
+     *
+     * Pemetaan collectibility ke key PD rates:
+     *   - Netflow  : key = bucket_id, collectibility dipakai langsung sebagai lookup key
+     *   - Migration: key = quality_grade_id, collectibility dipakai langsung sebagai lookup key
+     *
+     * Jika collectibility tidak memiliki mapping langsung di $pdRates:
+     *   → fallback: gunakan rata-rata semua PD rates yang tersedia untuk segmen itu
+     *   → bucket_id / quality_grade_id dikembalikan null (tidak ada kecocokan spesifik)
+     *
+     * Jika $pdRates kosong (snapshot belum ada): return [0.0, null, null]
+     *
+     * @param  array<int, float>  $pdRates  Map dari bucket_id/quality_grade_id ke pd_rate
+     * @param  int  $collectibility  Kolektibilitas akun (1–5)
+     * @return array{float, int|null, int|null} [pd_rate, bucket_id_used, quality_grade_id_used]
+     */
+    private function selectPdRate(array $pdRates, int $collectibility): array
+    {
+        if (empty($pdRates)) {
+            return [0.0, null, null];
+        }
+
+        if (isset($pdRates[$collectibility])) {
+            // Netflow: collectibility dipetakan ke bucket_id; Migration: ke quality_grade_id
+            $bucketId = $this->pdMethod === 'netflow' ? $collectibility : null;
+            $qualityGradeId = $this->pdMethod === 'migration' ? $collectibility : null;
+
+            return [$pdRates[$collectibility], $bucketId, $qualityGradeId];
+        }
+
+        // Fallback: rata-rata semua bucket/grade — tidak ada bucket/grade spesifik yang cocok
+        return [array_sum($pdRates) / count($pdRates), null, null];
+    }
+}

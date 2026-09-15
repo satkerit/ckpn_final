@@ -1,0 +1,176 @@
+@import url("https://fonts.bunny.net/css?family=plus-jakarta-sans:400,500,600,700,800&display=swap");
+@import "tailwindcss";
+@plugin '@tailwindcss/forms';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+@source '../../app/Livewire/**/*.php';
+
+@theme {
+    --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+    --color-primary-50: #eef2ff;
+    --color-primary-100: #e0e7ff;
+    --color-primary-200: #c7d2fe;
+    --color-primary-300: #a5b4fc;
+    --color-primary-400: #818cf8;
+    --color-primary-500: #6366f1;
+    --color-primary-600: #4f46e5;
+    --color-primary-700: #4338ca;
+    --color-primary-800: #3730a3;
+    --color-primary-900: #312e81;
+
+    --animate-fade-up: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+    --animate-fade-in: fade-in 0.35s ease-out both;
+
+    @keyframes fade-up {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    @keyframes fade-in {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+}
+
+/* ==========================================================================
+   App shell — background "ledger grid" halus (motif buku besar/audit trail)
+   ========================================================================== */
+.bg-app {
+    background-color: #09090b;
+    background-image:
+        radial-gradient(
+            1200px 500px at 85% -10%,
+            rgba(99, 102, 241, 0.12),
+            transparent 60%
+        ),
+        radial-gradient(
+            900px 420px at -15% 110%,
+            rgba(129, 140, 248, 0.09),
+            transparent 55%
+        ),
+        linear-gradient(rgba(99, 102, 241, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99, 102, 241, 0.055) 1px, transparent 1px);
+    background-size:
+        auto,
+        auto,
+        28px 28px,
+        28px 28px;
+}
+
+/* Sidebar — tekstur grid gelap sangat halus agar tidak flat */
+.bg-sidebar {
+    background-color: #101014;
+    background-image:
+        radial-gradient(
+            600px 300px at 0% 0%,
+            rgba(99, 102, 241, 0.12),
+            transparent 65%
+        ),
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+    background-size:
+        auto,
+        26px 26px,
+        26px 26px;
+}
+
+/* Angka finansial — kolom angka sejajar (domain CKPN penuh rupiah & persen) */
+.tabular {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Micro-interactions
+   ========================================================================== */
+
+/* Kartu dashboard: hover terangkat halus + ring aksen */
+.card-lift {
+    transition:
+        transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+        box-shadow 0.2s ease-out,
+        border-color 0.2s ease-out;
+}
+.card-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px -12px rgba(49, 46, 129, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .card-lift,
+    .card-lift:hover {
+        transition: none;
+        transform: none;
+    }
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}
+
+/* Selection & focus konsisten indigo */
+::selection {
+    background: rgba(99, 102, 241, 0.22);
+}
+
+/* Scrollbar halus untuk konten utama */
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+    background: rgba(161, 161, 170, 0.2);
+    border-radius: 99px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(161, 161, 170, 0.4);
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+/* Progress bar Livewire global — strip bergerak saat wire:loading aktif */
+.lw-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2.5px;
+    z-index: 300;
+    pointer-events: none;
+    overflow: hidden;
+}
+.lw-progress::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    border-radius: 99px;
+    background: linear-gradient(90deg, #6366f1, #a5b4fc);
+    animation: lw-slide 0.9s ease-in-out infinite;
+}
+@keyframes lw-slide {
+    0% {
+        left: -40%;
+    }
+    100% {
+        left: 100%;
+    }
+}
