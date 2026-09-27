@@ -155,17 +155,3 @@ Route::middleware('auth')->group(function (): void {
 Route::middleware(['auth:sanctum'])->prefix('api/upload-progress')->group(function (): void {
     Route::get('/{uploadId}', [UploadProgressController::class, 'show'])->name('api.upload-progress.show');
 });
-
-/*
-|--------------------------------------------------------------------------
-| Test Routes (Development only)
-|--------------------------------------------------------------------------
-*/
-
-if (config('app.debug')) {
-    Route::middleware(['auth'])->group(function (): void {
-        Route::get('/test-dialogs', function () {
-            return view('test-dialogs');
-        })->name('test-dialogs');
-    });
-}

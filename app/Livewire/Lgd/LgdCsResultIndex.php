@@ -269,8 +269,14 @@ class LgdCsResultIndex extends Component
             return;
         }
 
-        // Hapus snapshot periode tsb terlebih dahulu agar tidak terjadi akumulasi data lama + baru
-        $this->deletePeriodeData($periode);
+        // Hapus snapshot hasil periode tsb (run log lama tetap ada — history terjaga,
+        // konsisten dengan LgdFinalResultIndex::rekalkulasiPerhitungan)
+        DB::transaction(function () use ($periode): void {
+            DB::table('lgd_collateral_shortfall_by_segment_result')
+                ->where('calculation_period', $periode)->delete();
+            DB::table('lgd_collateral_shortfall_result')
+                ->where('calculation_period', $periode)->delete();
+        });
 
         $userId = auth()->id();
         $dispatched = 0;

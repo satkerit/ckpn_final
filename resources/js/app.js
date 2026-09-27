@@ -1,5 +1,4 @@
 import Swal from 'sweetalert2';
-import './upload-manager.js';
 
 // Setup global SweetAlert2
 window.Swal = Swal;

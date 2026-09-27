@@ -59,7 +59,7 @@ trait StreamableExcelUpload
                 if ($rowIndex === 1) {
                     /** @var Row $row */
                     $colIndex = 0;
-                    foreach ($row->cells as $cell) {
+                    foreach ($row->getCells() as $cell) {
                         /** @var Cell $cell */
                         $value = strtolower(trim((string) $cell->getValue()));
                         if ($value !== '') {
@@ -93,7 +93,7 @@ trait StreamableExcelUpload
                 $rowData = [];
                 /** @var Row $row */
                 $colIndex = 0;
-                foreach ($row->cells as $cell) {
+                foreach ($row->getCells() as $cell) {
                     /** @var Cell $cell */
                     $rowData[$colIndex] = $cell->getValue();
                     $colIndex++;

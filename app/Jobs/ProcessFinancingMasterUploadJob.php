@@ -46,8 +46,6 @@ class ProcessFinancingMasterUploadJob extends UploadJobBase
      */
     protected function process(FinancingUploadBatch $batch): void
     {
-        $this->initializeProgress((string) $this->batchId);
-
         $this->updateProgress([
             'status_title' => 'Membaca file...',
             'status_text' => 'Menganalisis struktur file Excel',

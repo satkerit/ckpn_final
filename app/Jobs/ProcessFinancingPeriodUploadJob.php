@@ -51,8 +51,6 @@ class ProcessFinancingPeriodUploadJob extends UploadJobBase
      */
     protected function process(FinancingUploadBatch $batch): void
     {
-        $this->initializeProgress((string) $this->batchId);
-
         // Preload account_number → id cache (1 query, O(1) lookup)
         $accountCache = DB::table('financing_accounts')
             ->pluck('id', 'account_number')
