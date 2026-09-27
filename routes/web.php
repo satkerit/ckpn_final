@@ -7,6 +7,7 @@ use App\Exports\CollateralUploadTemplateExport;
 use App\Exports\FinancingMasterTemplateExport;
 use App\Exports\FinancingOfficeTemplateExport;
 use App\Exports\FinancingPeriodTemplateExport;
+use App\Http\Controllers\Api\UploadProgressController;
 use App\Http\Controllers\Auth\LogoutController;
 use App\Livewire\Admin\CalculationRunLogIndex;
 use App\Livewire\Admin\UserIndex;
@@ -144,3 +145,27 @@ Route::middleware('auth')->group(function (): void {
         Route::get('/admin/run-logs', CalculationRunLogIndex::class)->name('admin.run-logs.index');
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| Upload Progress API Routes
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware(['auth:sanctum'])->prefix('api/upload-progress')->group(function (): void {
+    Route::get('/{uploadId}', [UploadProgressController::class, 'show'])->name('api.upload-progress.show');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Test Routes (Development only)
+|--------------------------------------------------------------------------
+*/
+
+if (config('app.debug')) {
+    Route::middleware(['auth'])->group(function (): void {
+        Route::get('/test-dialogs', function () {
+            return view('test-dialogs');
+        })->name('test-dialogs');
+    });
+}

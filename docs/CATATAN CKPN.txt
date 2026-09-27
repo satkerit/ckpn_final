@@ -1,0 +1,145 @@
+APLIKASI CALCULATOR CKPN
+
+Dibuat menggunakan laravel + livewire Fullstack 13
+CSS Tailwinds CSS
+Database MYSQL
+
+Struktur Minimum Table
+
+Table Pembiayaan
+
+Nokontrak - Nomor Loan Pembiayaan (PK Not Auto Increment)
+nocif - Nomor CIF Debitur
+Nama - Nama Debitur
+kdprd - Kode Produk Pembiayaan
+kdloc - Kode Lokasi Kantor
+pokpby - Kode Akad Pembiayaan
+gunadeb - Jenis Penggunaan (1. Modal Kerja, 2. Investasi, 3. Konsumtif)
+tglwo - Tanggal Writeoff (format yyyymmdd contoh 20260101)
+
+Table History Pembiayaan
+
+id -  auto increment
+Nokontrak - Nomor Pembiayaan
+kdprd - Kode Produk Pembiayaan
+kdloc - Kode Lokasi Kantor
+pokpby - Kode Akad Pembiayaan
+tglexp - Tanggal Jatuh Tempo (yyyymmdd contoh 20260101)
+osmdlc - Outstanding Pokok
+osmgnc - Oustanding Margin
+tgkmdl - Tunggakan Pokok
+tgkmgn - Tunggakan Margin
+haritgk - hari tunggakan
+col - Kolektibiliti Pembiayaan (1 - 5)
+stsrec - status aktif
+stsacc - status Wo (bernilai W jika writeoff)
+ppka - Nominal PPKA
+periode - periode data (yyyymm - contoh 202608)
+
+Table Agunan / Jaminan
+
+tanpa primari key
+nokontrak - nomor pembiayaan berelasi dengan table histori atau table pembiayaan
+noreg - nomor register agunan
+urut - nomor urut agunan dengan register yang sama
+tgltaks - tanggal taksasi terakhir (yyyymmdd contoh 20260201)
+jnsjamin - kode jenis jaminan
+nominallikuid - nominal likuidasi
+
+Table Kantor
+
+kdloc - kode kantor(PK) non auto increment contoh 01,02,03
+nama - Nama Kantor
+alamat - alamat kantor
+
+
+Alur Kerja Perhitungan CKPN
+
+1. Menetapkan Periode CKPN yang akan dihitung
+2. Menetapkan Daftar Pembiayaan yang akan dihitung CKPN atau menetapkan EAD Sesuai Kriteria yang telah ditetapkan
+3. Menetapkan atau melakukan klasifikasi EAD menjadi CKPN Individual maupun CKPN Kolektif
+4. Melakukan Segmentasi baik itu satu tingkat atau lebih dari satu misalkan per lokasi, per kode akad, per jenis penggunaan dan harus dinamis sesuai pilihan user
+5. memilih metode yang digunakan untuk CKPN Kolektif apakah Metode PD Netflow atau PD Migration
+6. Jika Memilih Menggunakan Metode Netflow maka menetapkan rentang data yang akan digunakan apakah 1 tahun / 2 tahun / 3 tahun / 4 tahun / 5 tahun
+7. Menghitung PD Netflow berdasarkan rentang data yang dipilih sesuai segmentasi yang telah ditetapkan sebelumnya baik itu mengelompokan outstanding/tunggakan pokok (sesuai ketentuan akad apakah menggunakan outstanding / tunggakan pokok), menghitung persentase perpindahan bucket sesuai segmentasi yang telah dipilih, menghitung compound flow to loss hingga di hasilkan rata rata persentase PD
+8. melakukan perhitungan LGD baik itu LGD Expected Recovery maupun LGD Shortfall
+9. Menghitung CKPN Kolektif Final setelah mendapatkan Nilai PD maupun LGD (PD * LGD * EAD)
+
+
+CATATAN  PD Netflow
+
+1. Terdiri dari Bucket 1 hingga bucket 14
+
+Bucket 1 - 0 Hari
+Bucket 2 <= 30 Hari
+Bucket 3 <= 60 Hari
+Bucket 4 <= 90 Hari
+Bucket 5 <= 120 Hari
+Bucket 6 <= 150 Hari
+Bucket 7 <= 180 Hari
+Bucket 8 <= 210 Hari
+Bucket 9 <= 240 Hari
+Bucket 10 <= 270 hari
+Bucket 11 <= 300 Hari
+Bucket 12 <= 330 Hari
+Bucket 13 <= 360 Hari
+Bucket 14 > 360 Hari dan Pembiayaan yang tanggal dihapus Buku atau berstatus W Pada Periode tersebut. contoh jika rentang Data 202301 s/d 202612 maka pembiayaan yang berstatus W dengan tanggal dihapus buku dari periode 202301 s/d 2024. untuk pembiayaan yang berstatus W yang diambil adalah outstanding bukan lagi tunggakan pokok
+
+Catatan LGD
+1. LGD Expected Recovery
+
+adalah berisi daftar pembiayaan dengan berstatus hapus buku namun masih masuk rentang data 5 tahun terakhir. untuk mendapatkan informasi outstanding hapus buku adalah dengan mencari berapa total outstanding wo ketika periode data = tanggal wo
+
+untuk nominal recovery adalah dengan mencari outstanding Wo pada periode CKPN akan dihitung. jika pada periode CKPN akan dihitung pembiayaan sudah tidak terdaftar berarti recovery sudah 100%, jika masih ada data Write off tersebut pada periode perhitungan maka untuk mendapatkan total recovery dengan menggunakan rumus sebagai berikut. Total Recovery = Outstanding Wo - Outstanding Periode Perhitungan Jika periode perhitungan 202609 maka pada posisi tersebut sisa outstanding digunakan. untuk mendapatkan total persentase recovery maka menggunakan rumus. rate = total recovery / oustanding WO * 100. yang harus di perhatikan pembiaayaan writeoff yang tahun hapus buku diluar periode tidak masuk 
+
+
+Data yang digunakan:
+a. Data pembiayaan sesuai kategori pembiayaan dihapusbuku pertahun minimal 5 tahun kebelakang
+b. Data pembayaran kembali (recoveries) atas pembiayaan yang dihapusbuku sebagaimana huruf a pertahun dari pembayaran cash
+
+Metode LGD Expected Recoveries: mengandalkan hasil dari penerimaan hapus buku atas pembiayaan yang telah dihapusbuku
+
+
+Langkah Pengerjaan:
+1. Kumpulkan data pembiayaan berdasarkan kategori pembiayaan yang dihapusbuku pertahun sebagaimana huruf a 
+2. Kumpulkan data jumlah pembayaran kembali atas pembiayaan modal kerja yang dihapusbuku sebagaimana huruf b  saat dihapusbuku 
+3. hitung persentase pembayaran kembali terhadap jumlah pembiayaan yang dihapus buku untuk masing-masing posisi 
+4. menghitung pengembalian rata-rata (expected recoveries)
+5. hitung LGD menggunakan rumus LGD = 1-recovery 
+
+
+
+2. LGD Shortfall
+Data yang digunakan:
+1. Data rekening pembiayaan posisi perhitungan dengan kualitas 5 (baik agunan telah dieksekusi atau akan diselesaikan dengan penjualan agunan) dan data WO yang akan diselesaikan melalui penjualan agunan (belum dieksekusi)
+2. Data nilai penjualan agunan mempertimbangkan biaya-biaya, misal biaya lelang 
+
+Metode LGD Collateral Shortfall: mengandalkan penerimaan dari hasil penjualan/ekseksusi agunan yang telah dikuasai oleh BPR
+
+
+Langkah Pengerjaan:
+1. kumpulkan data pembiayaan sebagaimana huruf a per posisi penilaian
+2. Kumpulkan data nilai penjualan agunan atas kredit dimaksud (untuk yang belum dieksekusi menggunakan nilai estimasi agunan)
+3. hitung kerugian/shortfall yang merupakan selisih antara baki debet kredit yang belum dilunasi dengan nilai penjualan agunanx
+4. hitung LGD dengan membagi nilai kerugian dengan baki debet kredit yang belum dilunasi 
+
+Penting:
+Estimasi nilai agunan yang akan dieksekusi (belum tereksekusi secara real) harus dilakukan secara memadai (tidak boleh overvalue atau undervalue)
+
+
+sebagai catatan penting, untuk PD dan LGD juga harus melalui tahapan segmentasi yang sama agar konsisten
+
+
+
+Fitur Fitur Sistem
+1. Dashboard
+2. Periode penilaian
+3. Klasifikasi CKPN - Menentukan Daftar Debitur CKPN Individual dan CKPN Kolektif
+4. PD Netflow Calculator
+5. PD Migration Calculator
+6. LGD ( 1. LGD Expected Recovery 2. LGD Collateral Shortfall) Calculator
+7. Upload Data (1. Pembiayaan, 2.Historical, 3. Jaminan, 4. Data Kantor, 5. Data Produk Pembiayaan)
+8. Manajemen User
+9. Manajemen Role
+10. Manajemen Permission
+11. Setup Parameter (Setup Informasi Dasar Perusahaan dan lain-lainnya)

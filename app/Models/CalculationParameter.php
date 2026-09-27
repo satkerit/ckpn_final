@@ -40,4 +40,14 @@ class CalculationParameter extends Model
             ->whereNull('usage_type')
             ->value('parameter_value') ?? $default);
     }
+
+    /**
+     * Ambil nilai parameter sebagai integer.
+     */
+    public static function getInt(string $key, int $default = 0): int
+    {
+        $value = static::getValue($key);
+
+        return $value !== '' ? (int) $value : $default;
+    }
 }

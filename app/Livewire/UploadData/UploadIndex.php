@@ -5,12 +5,8 @@ declare(strict_types=1);
 namespace App\Livewire\UploadData;
 
 use App\Enums\UploadBatchStatus;
-use App\Jobs\ProcessCollateralTypeUploadJob;
-use App\Jobs\ProcessCollateralUploadJob;
-use App\Jobs\ProcessFinancingMasterUploadJob;
-use App\Jobs\ProcessFinancingOfficeUploadJob;
-use App\Jobs\ProcessFinancingPeriodUploadJob;
 use App\Models\FinancingUploadBatch;
+use App\Services\UploadProcessorService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
@@ -27,8 +23,8 @@ class UploadIndex extends Component
     /** Batas maksimal ukuran file upload (MB). */
     private const MAX_FILE_SIZE_MB = 20;
 
-    /** Ekstensi file yang diizinkan untuk upload. */
-    private const ALLOWED_EXTENSIONS = 'xlsx,xls,csv';
+    /** Ekstensi file yang diizinkan untuk upload (.xlsx dan .csv didukung oleh OpenSpout). */
+    private const ALLOWED_EXTENSIONS = 'xlsx,csv';
 
     // Upload type yang sedang aktif di-upload
     public string $activeType = '';
@@ -131,33 +127,60 @@ class UploadIndex extends Component
             'processed_rows' => 0,
         ]);
 
-        $this->dispatchUploadJob($batch->id, $storedPath, $types[$type]['upload_type']);
+        $processor = app(UploadProcessorService::class);
+        $processor->process($batch->id, Storage::disk('local')->path($storedPath), $types[$type]['upload_type']);
 
-        $this->messages[$type] = [
-            'type' => 'success',
-            'text' => "File \"{$filename}\" berhasil diunggah dan dijadwalkan untuk diproses.",
-        ];
+        // Refresh batch untuk dapatkan status & statistik terbaru
+        $batch->refresh();
 
-        // Reset field file setelah upload berhasil
+        if ($batch->status === UploadBatchStatus::Done) {
+            $errorCount = count($batch->error_summary ?? []);
+            $message = "File \"{$filename}\" berhasil diproses. {$batch->imported_rows} baris diimpor";
+
+            if ($batch->skipped_rows > 0) {
+                $message .= ", {$batch->skipped_rows} baris dilewati";
+            }
+
+            if ($errorCount > 0) {
+                $message .= ", {$errorCount} error ditemukan";
+            }
+
+            $this->messages[$type] = [
+                'type' => $errorCount > 0 ? 'warning' : 'success',
+                'text' => $message.'.',
+                'details' => $errorCount > 0 ? 'Lihat detail error di halaman Riwayat Upload.' : null,
+            ];
+        } elseif ($batch->status === UploadBatchStatus::Processing) {
+            $this->messages[$type] = [
+                'type' => 'info',
+                'text' => "File \"{$filename}\" sedang diproses di background.",
+                'details' => 'Refresh halaman ini atau cek Riwayat Upload untuk melihat progress.',
+            ];
+        } else {
+            $errorSummary = $batch->error_summary ?? [];
+            $mainError = '';
+
+            if (! empty($errorSummary)) {
+                $firstError = $errorSummary[0];
+                if (is_array($firstError)) {
+                    $mainError = $firstError['error'] ?? 'Unknown error';
+                } else {
+                    $mainError = $firstError;
+                }
+            }
+
+            $this->messages[$type] = [
+                'type' => 'error',
+                'text' => "File \"{$filename}\" gagal diproses.",
+                'details' => $mainError ? "Error: {$mainError}" : 'Lihat detail di halaman Riwayat Upload.',
+            ];
+        }
+
+        // Reset field file setelah upload selesai
         $this->{$field} = null;
     }
 
-    /** Dispatch job yang sesuai berdasarkan upload_type. Ref: PRD Bab 15 */
-    private function dispatchUploadJob(int $batchId, string $filePath, string $uploadType): void
-    {
-        $fullPath = Storage::disk('local')->path($filePath);
-
-        match ($uploadType) {
-            'active_financing' => ProcessFinancingMasterUploadJob::dispatch($batchId, $fullPath),
-            'historical_financing' => ProcessFinancingPeriodUploadJob::dispatch($batchId, $fullPath),
-            'collateral' => ProcessCollateralUploadJob::dispatch($batchId, $fullPath),
-            'financing_office' => ProcessFinancingOfficeUploadJob::dispatch($batchId, $fullPath),
-            'collateral_type' => ProcessCollateralTypeUploadJob::dispatch($batchId, $fullPath),
-            // TODO: ProcessRecoveryUploadJob belum dibuat
-            default => null,
-        };
-    }
-
+    /** Clear pesan status untuk tipe upload tertentu */
     public function clearMessage(string $type): void
     {
         unset($this->messages[$type]);

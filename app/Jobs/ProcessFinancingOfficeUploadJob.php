@@ -5,84 +5,131 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Enums\UploadBatchStatus;
-use App\Imports\FinancingOfficeUploadImport;
 use App\Models\FinancingUploadBatch;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\SerializesModels;
-use Maatwebsite\Excel\Facades\Excel;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 /**
  * Queued job untuk memproses upload Excel master data kantor pembiayaan secara async.
- * Ref: PRD Bab 15
  *
- * TUJUAN:
- * Mengimpor data kantor pembiayaan (financing offices) dari file Excel ke tabel
- * financing_offices. Data ini digunakan sebagai referensi hierarki kantor untuk
- * pengelompokan akun pembiayaan di seluruh modul kalkulasi.
+ * POSISI DALAM ALUR: DATA MASTER — referensi hierarki kantor untuk pengelompokan akun.
  *
- * PROSES:
- * 1. Validasi idempotency — skip jika batch sudah berstatus Done.
- * 2. Proses import via FinancingOfficeUploadImport (Maatwebsite Excel dengan validasi baris).
- * 3. Kumpulkan error dari failures() dan custom errors dari getErrors().
- * 4. Update batch: status=Done, imported_rows, failed_rows, error_summary.
- *    Jika exception fatal → status=Failed + error_summary = pesan exception.
+ * IMPLEMENTASI OPENSPOUT:
+ *   - Streaming read tanpa load seluruh file ke memori
+ *   - Memory konstan ~30-50MB berapapun ukuran file
+ *   - Bulk upsert per batch ke tabel financing_offices
  *
- * FORMAT FILE EXCEL:
- *   Kolom sesuai FinancingOfficeUploadImport (lihat class import untuk mapping kolom).
- *   Header baris pertama diabaikan oleh import class.
- *
- * ERROR HANDLING:
- *   Error per baris dicatat di error_summary (format: "Row N: pesan error").
- *   Import dilanjutkan meski ada baris yang gagal (tidak stop-on-first-error).
- *   Max retry: 3x, timeout: 300 detik.
+ * Ref: PRD Bab 15 (tabel financing_offices)
  */
-class ProcessFinancingOfficeUploadJob implements ShouldQueue
+class ProcessFinancingOfficeUploadJob extends UploadJobBase
 {
-    use InteractsWithQueue, Queueable, SerializesModels;
-
-    public int $tries = 3;
-
     public int $timeout = 300;
 
-    public function __construct(
-        private readonly int $batchId,
-        private readonly string $filePath,
-    ) {}
+    private const int BATCH_SIZE = 500;
 
-    public function handle(): void
+    /**
+     * Implementasi parsing master data kantor.
+     */
+    protected function process(FinancingUploadBatch $batch): void
     {
-        $batch = FinancingUploadBatch::findOrFail($this->batchId);
+        // Baca XLSX dengan OpenSpout streaming
+        $reader = $this->createReader($this->filePath);
+        $headingMap = $this->extractHeadings($reader);
 
-        // Idempotency guard
-        if ($batch->status === UploadBatchStatus::Done) {
+        // Reopen reader untuk iterasi data
+        $this->closeReader($reader);
+        $reader = $this->createReader($this->filePath);
+
+        $importedRows = 0;
+        $skippedRows = 0;
+        $processedRows = 0;
+        $errors = [];
+        $buffer = [];
+
+        // Resolve column indexes
+        $colCode = $this->resolveColIndex($headingMap, ['code', 'kode_kantor', 'kode', 'office_code']);
+        $colName = $this->resolveColIndex($headingMap, ['name', 'nama_kantor', 'nama']);
+        $colActive = $this->resolveColIndex($headingMap, ['is_active', 'aktif', 'active']);
+
+        // Stream rows
+        foreach ($this->streamRows($reader) as $rowNum => $rowData) {
+            $processedRows++;
+
+            $code = $this->parseString($this->getCellValue($rowData, $colCode));
+
+            if ($code === '') {
+                $skippedRows++;
+
+                continue;
+            }
+
+            $rawActive = $this->getCellValue($rowData, $colActive);
+            $isActive = $this->parseBoolean($rawActive, true);
+
+            $buffer[] = [
+                'code' => $code,
+                'name' => $this->parseString($this->getCellValue($rowData, $colName)) ?: $code,
+                'is_active' => $isActive,
+                'created_at' => now()->toDateTimeString(),
+                'updated_at' => now()->toDateTimeString(),
+            ];
+
+            if (count($buffer) >= self::BATCH_SIZE) {
+                $this->flushBuffer($buffer, $importedRows, $errors);
+                $batch->update([
+                    'processed_rows' => $processedRows,
+                    'imported_rows' => $importedRows,
+                    'skipped_rows' => $skippedRows,
+                ]);
+            }
+        }
+
+        // Flush sisa buffer
+        if (! empty($buffer)) {
+            $this->flushBuffer($buffer, $importedRows, $errors);
+        }
+
+        $this->closeReader($reader);
+
+        $batch->update([
+            'status' => UploadBatchStatus::Done,
+            'total_rows' => $processedRows,
+            'imported_rows' => $importedRows,
+            'failed_rows' => count($errors),
+            'skipped_rows' => $skippedRows,
+            'processed_rows' => $processedRows,
+            'error_summary' => $errors ?: null,
+            'progress_log' => [
+                'finished_at' => now()->toDateTimeString(),
+                'total' => $processedRows,
+                'imported' => $importedRows,
+                'skipped' => $skippedRows,
+                'errors' => count($errors),
+            ],
+        ]);
+    }
+
+    /**
+     * Bulk upsert buffer ke tabel financing_offices.
+     */
+    private function flushBuffer(array &$buffer, int &$importedRows, array &$errors): void
+    {
+        if (empty($buffer)) {
             return;
         }
 
-        $batch->update(['status' => UploadBatchStatus::Processing]);
-
         try {
-            $import = new FinancingOfficeUploadImport($batch);
-            Excel::import($import, $this->filePath, null, \Maatwebsite\Excel\Excel::XLSX);
+            DB::table('financing_offices')->upsert(
+                $buffer,
+                ['code'],
+                ['name', 'is_active', 'updated_at']
+            );
 
-            $failures = $import->failures();
-            $failureMessages = $failures->map(fn ($f) => "Row {$f->row()}: ".implode(', ', $f->errors()))->all();
-            $allErrors = array_merge($import->getErrors(), $failureMessages);
-
-            $batch->update([
-                'status' => UploadBatchStatus::Done,
-                'imported_rows' => $import->getImportedRows(),
-                'failed_rows' => count($allErrors),
-                'error_summary' => $allErrors ?: null,
-            ]);
+            $importedRows += count($buffer);
         } catch (Throwable $e) {
-            $batch->update([
-                'status' => UploadBatchStatus::Failed,
-                'error_summary' => [$e->getMessage()],
-            ]);
-            throw $e;
+            $errors[] = "Batch insert failed: {$e->getMessage()}";
         }
+
+        $buffer = [];
     }
 }

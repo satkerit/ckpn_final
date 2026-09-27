@@ -25,6 +25,7 @@ class FinancingPeriodDataSheet implements FromArray, WithHeadings, WithStyles, W
                 'MRB',             // kdprd
                 'MMB',             // pokpby
                 '10000000',        // osmdlc
+                '500000',          // ppka (nilai PPKA, angka; kosong jika tidak ada)
                 '1',               // colbaru (1-5)
                 '0',               // tgkhari (hari tunggakan, angka >= 0)
                 '',                // tgkmdl (yyyymmdd, tanggal mulai menunggak, kosong jika tidak menunggak)
@@ -45,6 +46,7 @@ class FinancingPeriodDataSheet implements FromArray, WithHeadings, WithStyles, W
             'kdprd',
             'pokpby',
             'osmdlc',
+            'ppka',
             'colbaru',
             'tgkhari',
             'tgkmdl',

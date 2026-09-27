@@ -6,13 +6,12 @@ namespace App\Jobs;
 
 use App\Enums\UploadBatchStatus;
 use App\Models\FinancingUploadBatch;
-use Carbon\Carbon;
+use App\Traits\StreamableExcelUpload;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
-use PhpOffice\PhpSpreadsheet\IOFactory;
 use Throwable;
 
 /**
@@ -22,11 +21,10 @@ use Throwable;
  * Data jaminan diperlukan oleh LgdCollateralShortfallCalculator untuk menghitung
  * Collateral Net Value dan Shortfall per akun (Ref: PRD Bab 10).
  *
- * IMPLEMENTASI HEMAT MEMORI:
- *   1. Memakai PhpSpreadsheet ReadDataOnly (tanpa memuat style / seluruh collection ke RAM).
- *   2. Preload lookup dictionary (account_number -> id & collateral_type_code -> id).
- *   3. Bulk upsert per batch (BATCH_SIZE = 1000) ke tabel collaterals.
- *   4. Garbage collection & disconnection worksheet saat selesai.
+ * IMPLEMENTASI OPENSPOUT:
+ *   - Streaming read tanpa load seluruh file ke memori
+ *   - Memory konstan ~30-50MB berapapun ukuran file
+ *   - Bulk upsert per batch ke tabel collaterals
  *
  * FORMAT FILE EXCEL (.xlsx):
  *   Baris 1 = header kolom.
@@ -45,7 +43,7 @@ use Throwable;
  */
 class ProcessCollateralUploadJob implements ShouldQueue
 {
-    use InteractsWithQueue, Queueable, SerializesModels;
+    use InteractsWithQueue, Queueable, SerializesModels, StreamableExcelUpload;
 
     public int $tries = 3;
 
@@ -96,31 +94,22 @@ class ProcessCollateralUploadJob implements ShouldQueue
                 ->map(fn ($id) => (int) $id)
                 ->all();
 
-            // 2. Baca XLSX dengan ReadDataOnly = true (memory-friendly streaming)
-            $reader = IOFactory::createReader('Xlsx');
-            $reader->setReadDataOnly(true);
-            $reader->setReadEmptyCells(false);
-            $spreadsheet = $reader->load($this->filePath);
-            $sheet = $spreadsheet->getActiveSheet();
+            // 2. Baca XLSX dengan OpenSpout streaming
+            $reader = $this->createReader($this->filePath);
+            $headingMap = $this->extractHeadings($reader);
+
+            // Reopen reader untuk iterasi data
+            $this->closeReader($reader);
+            $reader = $this->createReader($this->filePath);
 
             $importedRows = 0;
             $skippedRows = 0;
             $skippedNotFound = 0;
             $skippedInvalidType = 0;
             $processedRows = 0;
-            $errors = [];
             $buffer = [];
 
-            // 3. Mapping Heading Row (Baris 1)
-            $headings = [];
-            foreach ($sheet->getRowIterator(1, 1) as $row) {
-                foreach ($row->getCellIterator() as $cell) {
-                    $headings[] = strtolower(trim((string) $cell->getValue()));
-                }
-            }
-            $headingMap = array_flip($headings);
-
-            // Kolom aliases
+            // Resolve column indexes
             $colAccount = $this->resolveColIndex($headingMap, ['account_number', 'nokontrak', 'no_kontrak', 'nomor_kontrak']);
             $colCode = $this->resolveColIndex($headingMap, ['collateral_code', 'kode_agunan', 'kode_jaminan', 'collateral_id', 'id_agunan']);
             $colSeq = $this->resolveColIndex($headingMap, ['sequence_number', 'no_urut', 'seq', 'urut']);
@@ -131,23 +120,12 @@ class ProcessCollateralUploadJob implements ShouldQueue
             $colAppraisedAt = $this->resolveColIndex($headingMap, ['appraised_at', 'tanggal_taksasi', 'tgl_penilaian', 'tgl_taksasi']);
             $colActive = $this->resolveColIndex($headingMap, ['is_active', 'status_aktif', 'aktif']);
 
-            // 4. Iterasi Baris Data Mulai Baris 2
-            $highestRow = $sheet->getHighestDataRow();
-
-            for ($rowNum = 2; $rowNum <= $highestRow; $rowNum++) {
+            // 3. Stream rows
+            foreach ($this->streamRows($reader) as $rowNum => $rowData) {
                 $processedRows++;
-                $rowData = [];
 
-                foreach ($sheet->getRowIterator($rowNum, $rowNum) as $row) {
-                    $i = 0;
-                    foreach ($row->getCellIterator() as $cell) {
-                        $rowData[$i] = $cell->getValue();
-                        $i++;
-                    }
-                }
-
-                $accountNumber = trim((string) ($rowData[$colAccount] ?? ''));
-                $collateralCode = trim((string) ($rowData[$colCode] ?? ''));
+                $accountNumber = $this->parseString($this->getCellValue($rowData, $colAccount));
+                $collateralCode = $this->parseString($this->getCellValue($rowData, $colCode));
 
                 // Jika baris kosong total
                 if ($accountNumber === '' && $collateralCode === '') {
@@ -177,7 +155,7 @@ class ProcessCollateralUploadJob implements ShouldQueue
                 }
 
                 // Resolve collateral type ID
-                $typeCode = trim((string) ($rowData[$colType] ?? ''));
+                $typeCode = $this->parseString($this->getCellValue($rowData, $colType));
                 $typeId = $typeCache[$typeCode] ?? null;
                 if ($typeId === null) {
                     $skippedInvalidType++;
@@ -186,10 +164,10 @@ class ProcessCollateralUploadJob implements ShouldQueue
                     continue;
                 }
 
-                $seqVal = $rowData[$colSeq] ?? null;
+                $seqVal = $this->getCellValue($rowData, $colSeq);
                 $sequenceNumber = ($seqVal !== null && $seqVal !== '') ? (int) $seqVal : 1;
 
-                $rawActive = $rowData[$colActive] ?? null;
+                $rawActive = $this->getCellValue($rowData, $colActive);
                 $isActive = ($rawActive !== null && (string) $rawActive !== '')
                     ? (bool) (int) $rawActive
                     : true;
@@ -199,10 +177,10 @@ class ProcessCollateralUploadJob implements ShouldQueue
                     'collateral_code' => $collateralCode,
                     'sequence_number' => $sequenceNumber,
                     'collateral_type_id' => $typeId,
-                    'description' => isset($rowData[$colDesc]) ? (string) $rowData[$colDesc] : null,
-                    'appraisal_value' => $this->parseDecimal($rowData[$colAppraisal] ?? null),
-                    'estimated_sale_value' => $this->parseDecimal($rowData[$colLiquidation] ?? null),
-                    'appraised_at' => $this->parseDate($rowData[$colAppraisedAt] ?? null),
+                    'description' => $this->parseString($this->getCellValue($rowData, $colDesc)) ?: null,
+                    'appraisal_value' => $this->parseDecimal($this->getCellValue($rowData, $colAppraisal)),
+                    'estimated_sale_value' => $this->parseDecimal($this->getCellValue($rowData, $colLiquidation)),
+                    'appraised_at' => $this->parseDate($this->getCellValue($rowData, $colAppraisedAt)),
                     'is_active' => $isActive,
                     'created_at' => now()->toDateTimeString(),
                     'updated_at' => now()->toDateTimeString(),
@@ -223,13 +201,10 @@ class ProcessCollateralUploadJob implements ShouldQueue
                 $this->flushBuffer($buffer, $importedRows);
             }
 
-            // Bersihkan memory spreadsheet
-            $spreadsheet->disconnectWorksheets();
-            unset($spreadsheet);
-            gc_collect_cycles();
+            $this->closeReader($reader);
 
             // Ringkas error_summary
-            $errorSummary = $errors ?: [];
+            $errorSummary = [];
             if ($skippedNotFound > 0) {
                 $errorSummary[] = "account_number tidak ditemukan di financing_accounts: {$skippedNotFound} baris di-skip.";
             }
@@ -241,7 +216,7 @@ class ProcessCollateralUploadJob implements ShouldQueue
                 'status' => UploadBatchStatus::Done,
                 'total_rows' => $processedRows,
                 'imported_rows' => $importedRows,
-                'failed_rows' => count($errors) + $skippedNotFound + $skippedInvalidType,
+                'failed_rows' => $skippedNotFound + $skippedInvalidType,
                 'skipped_rows' => $skippedRows,
                 'processed_rows' => $processedRows,
                 'error_summary' => $errorSummary ?: null,
@@ -265,8 +240,6 @@ class ProcessCollateralUploadJob implements ShouldQueue
 
     /**
      * Bulk upsert buffer ke tabel collaterals.
-     *
-     * @param  array<int, array<string, mixed>>  $buffer
      */
     private function flushBuffer(array &$buffer, int &$importedRows): void
     {
@@ -290,58 +263,5 @@ class ProcessCollateralUploadJob implements ShouldQueue
 
         $importedRows += count($buffer);
         $buffer = [];
-    }
-
-    /**
-     * Resolusi indeks kolom berdasarkan alias.
-     *
-     * @param  array<string, int>  $headingMap
-     * @param  array<int, string>  $aliases
-     */
-    private function resolveColIndex(array $headingMap, array $aliases): int
-    {
-        foreach ($aliases as $alias) {
-            if (isset($headingMap[$alias])) {
-                return $headingMap[$alias];
-            }
-        }
-
-        return -1;
-    }
-
-    private function parseDecimal(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $cleaned = str_replace([',', ' '], ['', ''], (string) $value);
-
-        return is_numeric($cleaned) ? $cleaned : null;
-    }
-
-    private function parseDate(mixed $value): ?string
-    {
-        if ($value === null || $value === '') {
-            return null;
-        }
-
-        $str = trim((string) $value);
-
-        // Format yyyymmdd
-        if (preg_match('/^\d{8}$/', $str)) {
-            return Carbon::createFromFormat('Ymd', $str)?->toDateString();
-        }
-
-        // Format Excel serial number
-        if (is_numeric($str) && strlen($str) <= 5) {
-            return Carbon::createFromTimestamp(((int) $str - 25569) * 86400)?->toDateString();
-        }
-
-        try {
-            return Carbon::parse($str)->toDateString();
-        } catch (Throwable) {
-            return null;
-        }
     }
 }

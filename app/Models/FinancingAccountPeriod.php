@@ -22,6 +22,7 @@ class FinancingAccountPeriod extends Model
         'financing_account_id',
         'period',
         'outstanding_balance',
+        'ppka',
         'collectibility',
         'tgkhari',
         'tgkmdl',
@@ -37,6 +38,7 @@ class FinancingAccountPeriod extends Model
     {
         return [
             'outstanding_balance' => 'decimal:2',
+            'ppka' => 'decimal:2',
             'writeoff_date' => 'string',
             'tgkmdl' => 'decimal:2',
             'origination_date' => 'string',

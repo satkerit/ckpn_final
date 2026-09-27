@@ -35,12 +35,21 @@
                 {{-- Alert message --}}
                 @if (isset($messages[$typeKey]))
                     <div @class([
-                        'flex items-start gap-2 rounded-lg px-3 py-2 text-xs',
+                        'flex flex-col gap-1 rounded-lg px-3 py-2 text-xs',
                         'bg-emerald-950/60 text-emerald-300 border border-emerald-700/60' => $messages[$typeKey]['type'] === 'success',
                         'bg-rose-950/60 text-rose-300 border border-rose-700/60'             => $messages[$typeKey]['type'] === 'error',
+                        'bg-amber-950/60 text-amber-300 border border-amber-700/60'         => $messages[$typeKey]['type'] === 'warning',
+                        'bg-blue-950/60 text-blue-300 border border-blue-700/60'           => $messages[$typeKey]['type'] === 'info',
                     ])>
-                        <span class="flex-1">{{ $messages[$typeKey]['text'] }}</span>
-                        <button wire:click="clearMessage('{{ $typeKey }}')" class="shrink-0 text-zinc-400 hover:text-zinc-200">&times;</button>
+                        <div class="flex items-start justify-between gap-2">
+                            <span class="flex-1">{{ $messages[$typeKey]['text'] }}</span>
+                            <button wire:click="clearMessage('{{ $typeKey }}')" class="shrink-0 text-zinc-400 hover:text-zinc-200">&times;</button>
+                        </div>
+                        @if (isset($messages[$typeKey]['details']) && $messages[$typeKey]['details'])
+                            <div class="text-xs opacity-90 mt-1">
+                                {{ $messages[$typeKey]['details'] }}
+                            </div>
+                        @endif
                     </div>
                 @endif
 
@@ -52,7 +61,7 @@
                         <input
                             type="file"
                             wire:model="{{ $type['field'] }}"
-                            accept=".xlsx,.csv,.xls"
+                            accept=".xlsx,.csv"
                             class="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-800 file:px-3 file:py-2 file:text-xs file:font-medium file:text-zinc-200 hover:file:bg-zinc-700 focus:outline-none"
                         />
                         @error($type['field'])

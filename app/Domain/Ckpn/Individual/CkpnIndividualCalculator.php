@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Individual;
 
 use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\PokpbyCriteriaService;
 use App\Enums\ClassificationType;
 use App\Enums\UsageType;
 use App\Models\CkpnPeriodClassification;
 use App\Models\Collateral;
 use App\Models\FinancingAccount;
+use App\Models\FinancingAccountPeriod;
 
 /**
  * Calculates CKPN Individual untuk akun yang sudah diklasifikasi individual.
@@ -37,11 +39,16 @@ final class CkpnIndividualCalculator
      * - Termasuk dalam segmen usage_type yang diminta.
      * - Memiliki kode akad yang masuk daftar eligible (parameter `ckpn_eligible_akad_codes`);
      *   jika parameter kosong, semua akad eligible.
+     * - Memenuhi kriteria POKPBY jika termasuk dalam daftar khusus (parameter `pokpby_special_criteria_list`).
+     *   Contoh: POKPBY=10 harus sudah jatuh tempo.
      *
      * Formula per akun:
      *   Total Nilai Likuidasi = SUM(estimated_sale_value) atau fallback appraisal_value semua jaminan aktif
      *   Biaya Penjualan       = Total Nilai Likuidasi × sellingCostRate
-     *   CKPN Individual       = Baki Debet − Total Nilai Likuidasi − Biaya Penjualan
+     *   CKPN Individual       = EAD Value − Total Nilai Likuidasi − Biaya Penjualan
+     *   EAD Value ditentukan berdasarkan POKPBY:
+     *     - outstanding_balance untuk POKPBY umum
+     *     - tgkmdl untuk POKPBY tertentu (misal: POKPBY=10)
      *   (CKPN tidak boleh negatif; jika hasil < 0, dianggap 0)
      *
      * Input:
@@ -53,11 +60,14 @@ final class CkpnIndividualCalculator
      * @return array<int, array{
      *   financing_account_id: int,
      *   outstanding_balance: float,
+     *   tgkmdl_balance: float|null,
+     *   used_ead_value: float,
      *   total_collateral_liquidation_value: float,
      *   selling_cost_rate: float,
      *   selling_cost_amount: float,
      *   ckpn_amount: float,
      *   collectibility: int,
+     *   pokpby_code: int,
      * }>
      */
     public function calculatePerAccount(UsageType $usageType, string $calculationPeriod): array
@@ -94,22 +104,39 @@ final class CkpnIndividualCalculator
 
         foreach ($stagingAccounts as $staging) {
             $account = $staging->financingAccount;
+            $pokpbyCode = (int) $account->akad_code;
+
+            // Cek apakah akun memenuhi kriteria POKPBY
+            if (! PokpbyCriteriaService::meetsCriteria($pokpbyCode, $account->id, $calculationPeriod)) {
+                // Skip akun yang tidak memenuhi kriteria (misal: POKPBY=10 belum jatuh tempo)
+                continue;
+            }
+
+            // Get nilai EAD berdasarkan POKPBY
+            $tgkmdl = FinancingAccountPeriod::where('financing_account_id', $account->id)
+                ->where('period', $calculationPeriod)
+                ->value('tgkmdl');
+
             $outstanding = (float) $staging->outstanding_balance;
+            $eadValue = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);
 
             $totalLiquidationValue = $this->resolveTotalLiquidationValue($account);
             $sellingCostAmount = $totalLiquidationValue * $this->sellingCostRate;
 
-            // Formula PRD Bab 6.1
-            $ckpnAmount = max(0.0, $outstanding - $totalLiquidationValue - $sellingCostAmount);
+            // Formula PRD Bab 6.1 menggunakan EAD value yang sesuai dengan POKPBY
+            $ckpnAmount = max(0.0, $eadValue - $totalLiquidationValue - $sellingCostAmount);
 
             $results[] = [
                 'financing_account_id' => $account->id,
                 'outstanding_balance' => $outstanding,
+                'tgkmdl_balance' => $tgkmdl,
+                'used_ead_value' => $eadValue,
                 'total_collateral_liquidation_value' => $totalLiquidationValue,
                 'selling_cost_rate' => $this->sellingCostRate,
                 'selling_cost_amount' => $sellingCostAmount,
                 'ckpn_amount' => $ckpnAmount,
                 'collectibility' => (int) $staging->collectibility,
+                'pokpby_code' => $pokpbyCode,
             ];
         }
 

@@ -22,6 +22,7 @@ class FinancingPeriodPetunjukSheet implements FromArray, WithTitle
             ['kdprd', 'Kode produk pembiayaan', 'MRB', 'Tidak'],
             ['pokpby', 'Kode akad / jenis akad', 'MMB', 'Tidak'],
             ['osmdlc', 'Saldo outstanding / pokok berjalan (angka)', '10000000', 'Ya'],
+            ['ppka', 'Nilai PPKA (Penilaian Kualitas Aktiva) per periode — angka rupiah, kosong jika tidak ada', '500000', 'Tidak'],
             ['colbaru', 'Kolektibilitas baru: 1=Lancar, 2=DPK, 3=Kurang Lancar, 4=Diragukan, 5=Macet', '1', 'Ya'],
             ['tglwo', 'Tanggal write-off, format yyyymmdd (kosong jika tidak WO)', '20240101', 'Tidak'],
             ['stsrec', 'Status rekening: A=Aktif, L=Lunas, H=Hapus Buku, dll', 'A', 'Tidak'],

@@ -3,16 +3,18 @@
 declare(strict_types=1);
 
 use App\Enums\UploadBatchStatus;
-use App\Enums\UploadType;
 use App\Jobs\ProcessCollateralUploadJob;
 use App\Models\Collateral;
 use App\Models\CollateralType;
 use App\Models\FinancingAccount;
 use App\Models\FinancingUploadBatch;
+use App\Models\User;
+use App\Services\UploadProcessorService;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 it('dapat memproses file excel collateral secara memory-efficient dan melakukan upsert', function () {
+    $user = User::factory()->create();
     $account = FinancingAccount::factory()->create([
         'account_number' => 'ACC-001',
     ]);
@@ -38,16 +40,16 @@ it('dapat memproses file excel collateral secara memory-efficient dan melakukan 
     $writer->save($tempPath);
 
     $batch = FinancingUploadBatch::create([
-        'period' => '202501',
-        'upload_type' => UploadType::Collateral,
-        'file_name' => basename($tempPath),
-        'file_path' => $tempPath,
+        'upload_type' => 'collateral',
+        'filename' => basename($tempPath),
+        'uploaded_by_user_id' => $user->id,
+        'uploaded_at' => now(),
         'status' => UploadBatchStatus::Pending,
-        'uploaded_by' => 1,
     ]);
 
-    $job = new ProcessCollateralUploadJob($batch->id, $tempPath);
-    $job->handle();
+    // Pakai service synchronous (dispatchSync) — mengganti mekanisme queue
+    $processor = app(UploadProcessorService::class);
+    $processor->process($batch->id, $tempPath, 'collateral');
 
     $batch->refresh();
     expect($batch->status)->toBe(UploadBatchStatus::Done)
@@ -65,17 +67,17 @@ it('dapat memproses file excel collateral secara memory-efficient dan melakukan 
 });
 
 it('bersifat idempoten jika status batch sudah Done', function () {
+    $user = User::factory()->create();
     $batch = FinancingUploadBatch::create([
-        'period' => '202501',
-        'upload_type' => UploadType::Collateral,
-        'file_name' => 'dummy.xlsx',
-        'file_path' => 'dummy.xlsx',
+        'upload_type' => 'collateral',
+        'filename' => 'dummy.xlsx',
+        'uploaded_by_user_id' => $user->id,
+        'uploaded_at' => now(),
         'status' => UploadBatchStatus::Done,
-        'uploaded_by' => 1,
     ]);
 
-    $job = new ProcessCollateralUploadJob($batch->id, 'dummy.xlsx');
-    $job->handle();
+    // dispatchSync tetap aman karena job guard idempotency-nya
+    ProcessCollateralUploadJob::dispatchSync($batch->id, 'dummy.xlsx');
 
-    expect($batch->refresh()->status)->toBe(UploadBatchStatus::Done);
+    expect($batch->fresh()->status)->toBe(UploadBatchStatus::Done);
 });

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Collective;
 
+use App\Domain\Ckpn\Services\PokpbyCriteriaService;
 use App\Enums\ClassificationType;
 use App\Enums\UsageType;
 use App\Models\CkpnPeriodClassification;
+use App\Models\FinancingAccountPeriod;
 use App\Models\LgdFinalResult;
 use App\Models\PdMigrationResult;
 use App\Models\PdNetflowResult;
@@ -35,13 +37,15 @@ final class CkpnCollectiveCalculator
      *
      * Formula per akun:
      *   CKPN = PD × LGD × EAD
-     *   EAD  = outstanding_balance periode perhitungan
+     *   EAD  = nilai berdasarkan POKPBY (outstanding_balance atau tgkmdl)
      *   PD   = pd_rate dari snapshot (netflow atau migration, tergantung $pdMethod)
      *   LGD  = lgd_final_rate dari snapshot lgd_final_results per segmen
      *
      * Kriteria akun yang diproses:
      *   - Masuk klasifikasi Collective di tabel ckpn_period_classifications untuk periode ini
      *   - Segmen (usage_type) sesuai parameter
+     *   - Memenuhi kriteria POKPBY jika termasuk dalam daftar khusus (parameter `pokpby_special_criteria_list`)
+     *     Contoh: POKPBY=10 harus sudah jatuh tempo.
      *   - Snapshot LGD Final harus sudah tersedia (lihat LgdFinalCalculator)
      *
      * Pemilihan PD rate per akun:
@@ -65,6 +69,9 @@ final class CkpnCollectiveCalculator
      *   lgd_method_used: string,
      *   lgd_rate: float,
      *   ead: float,
+     *   pokpby_code: int,
+     *   tgkmdl_balance: float|null,
+     *   outstanding_balance: float,
      *   ckpn_amount: float,
      * }>
      */
@@ -94,27 +101,47 @@ final class CkpnCollectiveCalculator
         $results = [];
 
         foreach ($stagingAccounts as $staging) {
+            $account = $staging->financingAccount;
+            $pokpbyCode = (int) $account->akad_code;
+            $financingAccountId = $account->id;
+
+            // Cek apakah akun memenuhi kriteria POKPBY
+            if (! PokpbyCriteriaService::meetsCriteria($pokpbyCode, $financingAccountId, $calculationPeriod)) {
+                // Skip akun yang tidak memenuhi kriteria (misal: POKPBY=10 belum jatuh tempo)
+                continue;
+            }
+
+            // Get nilai outstanding dan tgkmdl untuk periode ini
+            $periodData = FinancingAccountPeriod::where('financing_account_id', $financingAccountId)
+                ->where('period', $calculationPeriod)
+                ->first();
+
             $outstanding = (float) $staging->outstanding_balance;
+            $tgkmdl = $periodData?->tgkmdl;
+
+            // Get EAD berdasarkan POKPBY
+            $ead = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);
+
             $collectibility = (int) $staging->collectibility;
 
             // PD selection: gunakan bucket/quality-grade dari collectibility mapping
             // Fallback ke PD rata-rata segmen jika tidak ada mapping langsung
             [$pdRate, $bucketIdUsed, $qualityGradeIdUsed] = $this->selectPdRate($pdRates, $collectibility);
 
-            // EAD = Baki Debet periode ini
-            $ead = $outstanding;
-
             // Formula: CKPN = PD x LGD x EAD
             $ckpnAmount = $pdRate * $lgdRate * $ead;
 
             $results[] = [
-                'financing_account_id' => $staging->financingAccount->id,
+                'financing_account_id' => $financingAccountId,
                 'usage_type' => $usageType->value,
                 'pd_method_used' => $this->pdMethod,
                 'pd_rate' => $pdRate,
                 'lgd_method_used' => $lgdMethod,
                 'lgd_rate' => $lgdRate,
                 'ead' => $ead,
+                'pokpby_code' => $pokpbyCode,
+                'tgkmdl_balance' => $tgkmdl,
+                'outstanding_balance' => $outstanding,
                 // Bucket (netflow) atau quality grade (migration) yang dipakai untuk memilih PD rate
                 'pd_bucket_id' => $bucketIdUsed,
                 'pd_quality_grade_id' => $qualityGradeIdUsed,

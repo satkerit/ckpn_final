@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Enums\AnomalySeverity;
 use App\Enums\AnomalyType;
 use App\Enums\UsageType;
 use Database\Factories\DataQualityAnomalyFactory;
@@ -24,9 +25,12 @@ class DataQualityAnomaly extends Model
         'bucket_id',
         'anomaly_type',
         'description',
-        'is_resolved',
-        'resolved_by_user_id',
-        'resolved_at',
+        'severity',
+        'status',
+        'reviewed_by',
+        'reviewed_at',
+        'review_notes',
+        'source_table',
     ];
 
     protected function casts(): array
@@ -34,8 +38,8 @@ class DataQualityAnomaly extends Model
         return [
             'usage_type' => UsageType::class,
             'anomaly_type' => AnomalyType::class,
-            'is_resolved' => 'boolean',
-            'resolved_at' => 'datetime',
+            'severity' => AnomalySeverity::class,
+            'reviewed_at' => 'datetime',
         ];
     }
 
@@ -44,8 +48,13 @@ class DataQualityAnomaly extends Model
         return $this->belongsTo(Bucket::class);
     }
 
-    public function resolvedBy(): BelongsTo
+    public function reviewedBy(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'resolved_by_user_id');
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    public function getUsageTypeLabelAttribute(): string
+    {
+        return $this->usage_type ? $this->usage_type->label() : 'N/A';
     }
 }

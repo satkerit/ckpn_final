@@ -63,6 +63,7 @@
                         <th class="px-5 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wide">Tgl Awal Pembiayaan</th>
                         <th class="px-5 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wide">Tgl Jatuh Tempo</th>
                         <th class="px-5 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wide">Saldo Pokok</th>
+                        <th class="px-5 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wide">PPKA</th>
                         <th class="px-5 py-3 text-center text-xs font-semibold text-zinc-400 uppercase tracking-wide">Kolektibilitas</th>
                         <th class="px-5 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wide">TGK Hari</th>
                         <th class="px-5 py-3 text-right text-xs font-semibold text-zinc-400 uppercase tracking-wide">TGK Modal</th>
@@ -87,6 +88,9 @@
                             </td>
                             <td class="px-5 py-3 text-right tabular-nums text-xs text-zinc-300">
                                 {{ number_format((float) $row->outstanding_balance, 0, ',', '.') }}
+                            </td>
+                            <td class="px-5 py-3 text-right tabular-nums text-xs text-zinc-400">
+                                {{ $row->ppka !== null ? number_format((float) $row->ppka, 0, ',', '.') : '-' }}
                             </td>
                             <td class="px-5 py-3 text-center">
                                 @php
@@ -114,7 +118,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="10" class="px-5 py-10 text-center text-zinc-500 text-sm">
+                            <td colspan="11" class="px-5 py-10 text-center text-zinc-500 text-sm">
                                 @if ($filterPeriod || $filterAccount || $filterStatus)
                                     Tidak ada data yang sesuai dengan filter.
                                 @else
