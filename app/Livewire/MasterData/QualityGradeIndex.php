@@ -97,6 +97,8 @@ class QualityGradeIndex extends Component
 
     public function save(): void
     {
+        $this->authorize($this->editingId ? 'update' : 'create', QualityGrade::class);
+
         $this->validate();
 
         $data = [
@@ -126,7 +128,9 @@ class QualityGradeIndex extends Component
     public function delete(): void
     {
         if ($this->deletingId) {
-            QualityGrade::findOrFail($this->deletingId)->delete();
+            $grade = QualityGrade::findOrFail($this->deletingId);
+            $this->authorize('delete', $grade);
+            $grade->delete();
             $this->dispatch('notify', type: 'success', message: 'Quality grade berhasil dihapus.');
         }
         $this->showDeleteConfirm = false;

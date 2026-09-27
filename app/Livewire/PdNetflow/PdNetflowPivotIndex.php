@@ -10,6 +10,7 @@ use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
 use App\Models\ExportJob;
 use App\Models\PdNetflowCalculationHistory;
+use App\Models\PdNetflowResult;
 use App\Services\PdNetflowDetailService;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
@@ -232,6 +233,8 @@ class PdNetflowPivotIndex extends Component
     /** Hapus snapshot dari DB untuk periode + usage_type yang dipilih. */
     public function deleteSnapshot(): void
     {
+        $this->authorize('deleteAny', PdNetflowResult::class);
+
         $this->confirmingAction = '';
         $usageTypeValue = $this->filterUsageType !== '' && $this->filterUsageType !== 'all'
             ? (int) $this->filterUsageType

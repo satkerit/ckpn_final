@@ -116,10 +116,13 @@ class RolesAndPermissionsSeeder extends Seeder
         $riskAnalystPerms[] = 'View:CkpnPeriod';
         $riskAnalystPerms[] = 'Create:CkpnPeriod';
 
-        // Bisa lihat semua hasil
+        // Bisa lihat semua hasil + jalankan/hapus kalkulasi (create/delete snapshot)
         foreach (self::RESULT_RESOURCES as $resource) {
             $riskAnalystPerms[] = "ViewAny:{$resource}";
             $riskAnalystPerms[] = "View:{$resource}";
+            $riskAnalystPerms[] = "Create:{$resource}";
+            $riskAnalystPerms[] = "Delete:{$resource}";
+            $riskAnalystPerms[] = "DeleteAny:{$resource}";
         }
 
         // Bisa lihat + resolve anomali data quality di reporting

@@ -100,6 +100,8 @@ class CalculationParameterIndex extends Component
 
     public function save(): void
     {
+        $this->authorize($this->editingId ? 'update' : 'create', CalculationParameter::class);
+
         $this->validate();
 
         $data = [
@@ -129,7 +131,9 @@ class CalculationParameterIndex extends Component
     public function delete(): void
     {
         if ($this->deletingId) {
-            CalculationParameter::findOrFail($this->deletingId)->delete();
+            $parameter = CalculationParameter::findOrFail($this->deletingId);
+            $this->authorize('delete', $parameter);
+            $parameter->delete();
             $this->dispatch('notify', type: 'success', message: 'Parameter berhasil dihapus.');
         }
         $this->showDeleteConfirm = false;

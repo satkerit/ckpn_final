@@ -125,6 +125,8 @@ class CkpnIndividualResultIndex extends Component
      */
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', CkpnIndividualResult::class);
+
         $this->confirmingAction = '';
         $periode = $this->individualPeriod;
 
@@ -189,6 +191,8 @@ class CkpnIndividualResultIndex extends Component
             return;
         }
 
+        $this->authorize('delete', CkpnIndividualResult::findOrFail($this->deletingId));
+
         try {
             CkpnIndividualResult::findOrFail($this->deletingId)->delete();
             $this->dispatch('notify', type: 'success', message: 'Baris berhasil dihapus.');
@@ -223,6 +227,8 @@ class CkpnIndividualResultIndex extends Component
 
             return;
         }
+
+        $this->authorize('deleteAny', CkpnIndividualResult::class);
 
         $deleted = 0;
         $errors = 0;
@@ -266,6 +272,8 @@ class CkpnIndividualResultIndex extends Component
     /** Hapus seluruh baris CkpnIndividualResult untuk periode yang sedang ditampilkan. */
     public function hapusPeriode(): void
     {
+        $this->authorize('deleteAny', CkpnIndividualResult::class);
+
         $this->confirmingAction = '';
 
         $deleted = CkpnIndividualResult::where('calculation_period', $this->filterPeriode)->delete();

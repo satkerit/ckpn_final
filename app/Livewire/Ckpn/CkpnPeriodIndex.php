@@ -92,6 +92,8 @@ class CkpnPeriodIndex extends Component
 
     public function simpan(): void
     {
+        $this->authorize($this->editingId !== null ? 'update' : 'create', CkpnPeriod::class);
+
         $this->validate();
 
         $data = [
@@ -139,6 +141,7 @@ class CkpnPeriodIndex extends Component
         }
 
         $period = CkpnPeriod::findOrFail($this->deletingId);
+        $this->authorize('delete', $period);
 
         if ($period->isApproved()) {
             $this->flashMessage = 'Periode yang sudah Approved tidak dapat dihapus.';
@@ -204,6 +207,9 @@ class CkpnPeriodIndex extends Component
      */
     public function ubahStatus(int $id, string $statusBaru): void
     {
+        $period = CkpnPeriod::findOrFail($id);
+        $this->authorize('update', $period);
+
         $allowed = ['draft', 'in_progress', 'completed', 'approved'];
         if (! in_array($statusBaru, $allowed, true)) {
             return;
@@ -257,7 +263,6 @@ class CkpnPeriodIndex extends Component
         // Total outstanding/EAD memakai filter baseline yang sama dengan PopulatePeriodDebtorsJob
         // (aktif A, bukan write-off W, produk != 72, akad 03 hanya jika sudah jatuh tempo) — Ref: PRD Bab 6.1
         // Tanggal asesmen = akhir bulan dari periode masing-masing baris (yyyymm).
-        $periodEndSql = "LAST_DAY(STR_TO_DATE(CONCAT(fap.period, '01'), '%Y%m%d'))";
         $outstandingByPeriod = DB::table('financing_account_periods as fap')
             ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
             ->where('fap.financing_status', 'A')
@@ -266,12 +271,12 @@ class CkpnPeriodIndex extends Component
                 $q->whereNull('fa.product_code')
                     ->orWhere('fa.product_code', '!=', '72');
             })
-            ->where(function ($query) use ($periodEndSql): void {
+            ->where(function ($query): void {
                 $query->where('fa.akad_code', '!=', '03')
-                    ->orWhere(function ($m) use ($periodEndSql): void {
+                    ->orWhere(function ($m): void {
                         $m->where('fa.akad_code', '03')
                             ->whereNotNull('fap.maturity_date')
-                            ->whereRaw("fap.maturity_date <= {$periodEndSql}");
+                            ->whereRaw("fap.maturity_date <= LAST_DAY(STR_TO_DATE(CONCAT(fap.period, '01'), '%Y%m%d'))");
                     });
             })
             ->select('fap.period', DB::raw('SUM(fap.outstanding_balance) as total_outstanding'))

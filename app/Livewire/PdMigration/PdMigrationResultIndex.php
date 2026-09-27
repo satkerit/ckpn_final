@@ -144,6 +144,7 @@ class PdMigrationResultIndex extends Component
      */
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', PdMigrationResult::class);
         $this->confirmingAction = '';
         $periode = trim($this->filterPeriode ?: $this->runPeriode);
 
@@ -174,6 +175,7 @@ class PdMigrationResultIndex extends Component
 
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', PdMigrationResult::class);
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 

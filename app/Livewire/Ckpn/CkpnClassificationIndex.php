@@ -124,6 +124,8 @@ class CkpnClassificationIndex extends Component
             return;
         }
 
+        $this->authorize('update', $period);
+
         if ($period->isApproved()) {
             $this->dispatch('notify', type: 'error', message: 'Periode yang sudah Approved tidak dapat dihapus klasifikasinya.');
 
@@ -152,6 +154,8 @@ class CkpnClassificationIndex extends Component
 
             return;
         }
+
+        $this->authorize('update', $period);
 
         if ($period->isApproved()) {
             $this->dispatch('notify', type: 'error', message: 'Periode yang sudah Approved tidak dapat diklasifikasikan ulang.');

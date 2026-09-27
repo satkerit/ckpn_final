@@ -99,6 +99,8 @@ class CollateralTypeIndex extends Component
 
     public function save(): void
     {
+        $this->authorize($this->editingId ? 'update' : 'create', CollateralType::class);
+
         $this->validate();
 
         $data = [
@@ -128,7 +130,9 @@ class CollateralTypeIndex extends Component
     public function delete(): void
     {
         if ($this->deletingId) {
-            CollateralType::findOrFail($this->deletingId)->delete();
+            $type = CollateralType::findOrFail($this->deletingId);
+            $this->authorize('delete', $type);
+            $type->delete();
             $this->dispatch('notify', type: 'success', message: 'Jenis agunan berhasil dihapus.');
         }
         $this->showDeleteConfirm = false;

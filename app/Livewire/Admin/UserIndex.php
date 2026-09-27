@@ -111,6 +111,9 @@ class UserIndex extends Component
 
     public function save(): void
     {
+        // Ref: AGENTS.md Bab 5.5 — otorisasi lewat Policy, bukan hardcode role
+        $this->authorize($this->editingId ? 'update' : 'create', User::class);
+
         $this->validate();
 
         if ($this->editingId) {
@@ -159,6 +162,8 @@ class UserIndex extends Component
         }
 
         $user = User::findOrFail($this->deletingId);
+        $this->authorize('delete', $user);
+
         $userName = $user->name;
         $user->delete();
 

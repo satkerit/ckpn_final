@@ -1,29 +1,78 @@
-*.log
-.DS_Store
-.env
-.env.backup
-.env.production
-.phpactor.json
-.phpunit.result.cache
-/db_ckpn_final
-/.fleet
-/.idea
-/.nova
-/.phpunit.cache
-/.vscode
-/.zed
-/auth.json
+# ============================================================
+# Dependencies
+# ============================================================
+/vendor
 /node_modules
+/docs
+/tests
+
+# ============================================================
+# Laravel generated / runtime files
+# ============================================================
+/bootstrap/cache/*.php
 /public/build
 /public/hot
 /public/storage
 /storage/*.key
 /storage/pail
-/vendor
-Homestead.json
-Homestead.yaml
-Thumbs.db
+/storage/logs/*.log
 
+# ============================================================
+# Environment & secrets
+# ============================================================
+.env
+.env.backup
+.env.production
+.env.*.local
+/auth.json
+
+# ============================================================
+# Database files
+# ============================================================
+*.sqlite
+*.sqlite-journal
+/db_ckpn_final
+
+# ============================================================
+# Test cache
+# ============================================================
+/.phpunit.cache
+.phpunit.result.cache
+
+# ============================================================
+# IDE & editor
+# ============================================================
+/.idea
+/.vscode
+/.fleet
+/.nova
+/.zed
+.phpactor.json
+
+# ============================================================
+# AI agent / local tooling (jangan commit config lokal agent)
+# ============================================================
 /.kiro
 /.trae
+CLAUDE.md
+
+# ============================================================
+# OS generated files
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Vagrant / legacy (bawaan Laravel default)
+# ============================================================
+Homestead.json
+Homestead.yaml
+
+# ============================================================
+# Windows scripts lokal (tidak relevan untuk semua kontributor)
+# ============================================================
+/queue-worker.bat
+/setup-task-scheduler.ps1
+
 

@@ -6,12 +6,6 @@ namespace App\Jobs;
 
 use App\Enums\UploadBatchStatus;
 use App\Models\FinancingUploadBatch;
-use App\Traits\HasProgressTracking;
-use App\Traits\StreamableExcelUpload;
-use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Queue\InteractsWithQueue;
-use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -46,222 +40,157 @@ use Throwable;
  *
  * Ref: PRD Bab 7 (PD Netflow input), Bab 8 (PD Migration input), Bab 15 (tabel financing_account_periods)
  */
-class ProcessFinancingPeriodUploadJob implements ShouldQueue
+class ProcessFinancingPeriodUploadJob extends UploadJobBase
 {
-    use HasProgressTracking, InteractsWithQueue, Queueable, SerializesModels, StreamableExcelUpload;
-
-    public int $tries = 3;
-
     public int $timeout = 1800; // 30 menit untuk file 300k+ baris
 
     private const BATCH_SIZE = 20000; // Optimal untuk file besar
 
-    public function __construct(
-        private readonly int $batchId,
-        private readonly string $filePath,
-    ) {}
-
     /**
-     * Eksekusi utama job upload data historis pembiayaan per periode.
+     * Implementasi parsing data historis per periode.
      */
-    public function handle(): void
+    protected function process(FinancingUploadBatch $batch): void
     {
-        $batch = FinancingUploadBatch::find($this->batchId);
-        if ($batch === null) {
-            return;
-        }
-
-        if ($batch->status === UploadBatchStatus::Done) {
-            return;
-        }
-
-        if (! file_exists($this->filePath)) {
-            $batch->update([
-                'status' => UploadBatchStatus::Failed,
-                'error_summary' => ["File tidak ditemukan: {$this->filePath}"],
-            ]);
-
-            return;
-        }
-
-        $batch->update(['status' => UploadBatchStatus::Processing]);
         $this->initializeProgress((string) $this->batchId);
 
-        try {
-            // Preload account_number → id cache (1 query, O(1) lookup)
-            $accountCache = DB::table('financing_accounts')
-                ->pluck('id', 'account_number')
-                ->map(fn ($id) => (int) $id)
-                ->all();
+        // Preload account_number → id cache (1 query, O(1) lookup)
+        $accountCache = DB::table('financing_accounts')
+            ->pluck('id', 'account_number')
+            ->map(fn ($id) => (int) $id)
+            ->all();
 
-            // Baca XLSX dengan OpenSpout streaming
-            $reader = $this->createReader($this->filePath);
-            $headingMap = $this->extractHeadings($reader);
+        // Baca XLSX dengan OpenSpout streaming
+        $reader = $this->createReader($this->filePath);
+        $headingMap = $this->extractHeadings($reader);
 
-            // Reopen reader untuk iterasi data (OpenSpout perlu close & open ulang)
-            $this->closeReader($reader);
-            $reader = $this->createReader($this->filePath);
+        // Reopen reader untuk iterasi data (OpenSpout perlu close & open ulang)
+        $this->closeReader($reader);
+        $reader = $this->createReader($this->filePath);
 
-            $importedRows = 0;
-            $skippedRows = 0;
-            $skippedNotFound = 0;
-            $duplicateRows = 0;
-            $processedRows = 0;
-            $buffer = [];
+        $importedRows = 0;
+        $skippedRows = 0;
+        $skippedNotFound = 0;
+        $duplicateRows = 0;
+        $processedRows = 0;
+        $buffer = [];
 
-            // Resolve column indexes
-            $colNokontrak = $this->resolveColIndex($headingMap, ['nokontrak', 'no_kontrak', 'nomor_kontrak', 'account_number']);
-            $colPeriode = $this->resolveColIndex($headingMap, ['periode', 'period']);
-            $colOsmdlc = $this->resolveColIndex($headingMap, ['osmdlc', 'outstanding', 'os']);
-            $colPpka = $this->resolveColIndex($headingMap, ['ppka']);
-            $colColbaru = $this->resolveColIndex($headingMap, ['colbaru', 'collectibility', 'kol']);
-            $colTgkhari = $this->resolveColIndex($headingMap, ['tgkhari', 'hari_tunggakan']);
-            $colTgkmdl = $this->resolveColIndex($headingMap, ['tgkmdl', 'tunggakan_modal']);
-            $colTglwo = $this->resolveColIndex($headingMap, ['tglwo', 'tanggal_wo', 'writeoff_date']);
-            $colStsrec = $this->resolveColIndex($headingMap, ['stsrec', 'status_rekening']);
-            $colStsacc = $this->resolveColIndex($headingMap, ['stsacc', 'status_akun']);
-            $colTgleff = $this->resolveColIndex($headingMap, ['tgleff', 'tanggal_efektif', 'origination_date']);
-            $colTglexp = $this->resolveColIndex($headingMap, ['tglexp', 'tanggal_jatuh_tempo', 'maturity_date']);
+        // Resolve column indexes
+        $colNokontrak = $this->resolveColIndex($headingMap, ['nokontrak', 'no_kontrak', 'nomor_kontrak', 'account_number']);
+        $colPeriode = $this->resolveColIndex($headingMap, ['periode', 'period']);
+        $colOsmdlc = $this->resolveColIndex($headingMap, ['osmdlc', 'outstanding', 'os']);
+        $colPpka = $this->resolveColIndex($headingMap, ['ppka']);
+        $colColbaru = $this->resolveColIndex($headingMap, ['colbaru', 'collectibility', 'kol']);
+        $colTgkhari = $this->resolveColIndex($headingMap, ['tgkhari', 'hari_tunggakan']);
+        $colTgkmdl = $this->resolveColIndex($headingMap, ['tgkmdl', 'tunggakan_modal']);
+        $colTglwo = $this->resolveColIndex($headingMap, ['tglwo', 'tanggal_wo', 'writeoff_date']);
+        $colStsrec = $this->resolveColIndex($headingMap, ['stsrec', 'status_rekening']);
+        $colStsacc = $this->resolveColIndex($headingMap, ['stsacc', 'status_akun']);
+        $colTgleff = $this->resolveColIndex($headingMap, ['tgleff', 'tanggal_efektif', 'origination_date']);
+        $colTglexp = $this->resolveColIndex($headingMap, ['tglexp', 'tanggal_jatuh_tempo', 'maturity_date']);
 
-            // Stream rows
-            foreach ($this->streamRows($reader) as $rowNum => $rowData) {
-                $processedRows++;
+        // Stream rows
+        foreach ($this->streamRows($reader) as $rowNum => $rowData) {
+            $processedRows++;
 
-                $accountNumber = $this->parseString($this->getCellValue($rowData, $colNokontrak));
-                $period = $this->parseString($this->getCellValue($rowData, $colPeriode));
+            $accountNumber = $this->parseString($this->getCellValue($rowData, $colNokontrak));
+            $period = $this->parseString($this->getCellValue($rowData, $colPeriode));
 
-                if ($accountNumber === '' || $period === '') {
-                    $skippedRows++;
+            if ($accountNumber === '' || $period === '') {
+                $skippedRows++;
 
-                    continue;
-                }
-
-                $accountId = $accountCache[$accountNumber] ?? null;
-                if ($accountId === null) {
-                    $skippedNotFound++;
-                    $skippedRows++;
-
-                    continue;
-                }
-
-                // Sanitasi tgkhari: unsigned smallint (0-65535)
-                $tgkhari = $this->parseInt($this->getCellValue($rowData, $colTgkhari), 0, 65535);
-                $tgkmdlRaw = $this->getCellValue($rowData, $colTgkmdl);
-                $tglwoRaw = $this->getCellValue($rowData, $colTglwo);
-                $stsrec = $this->parseString($this->getCellValue($rowData, $colStsrec), 'A');
-                $stsacc = $this->parseString($this->getCellValue($rowData, $colStsacc));
-                $tgleffRaw = $this->getCellValue($rowData, $colTgleff);
-                $tglexpRaw = $this->getCellValue($rowData, $colTglexp);
-                $ppkaRaw = $this->getCellValue($rowData, $colPpka);
-
-                $buffer[] = [
-                    'financing_account_id' => $accountId,
-                    'period' => $period,
-                    'outstanding_balance' => (float) ($this->getCellValue($rowData, $colOsmdlc, 0)),
-                    'ppka' => $ppkaRaw !== null && $ppkaRaw !== '' ? (float) $ppkaRaw : null,
-                    'collectibility' => (int) ($this->getCellValue($rowData, $colColbaru, 1)),
-                    'tgkhari' => $tgkhari,
-                    'tgkmdl' => $tgkmdlRaw !== null && $tgkmdlRaw !== '' ? (float) $tgkmdlRaw : null,
-                    'writeoff_date' => $this->parseDate($tglwoRaw),
-                    'financing_status' => strtoupper($stsrec),
-                    'writeoff_status' => strtoupper($stsacc) === 'W' ? 'W' : null,
-                    'origination_date' => $this->parseDate($tgleffRaw),
-                    'maturity_date' => $this->parseDate($tglexpRaw),
-                    'upload_batch_id' => $batch->id,
-                    'created_at' => now()->toDateTimeString(),
-                    'updated_at' => now()->toDateTimeString(),
-                ];
-
-                if (count($buffer) >= self::BATCH_SIZE) {
-                    $this->flushBuffer($buffer, $importedRows, $skippedRows, $duplicateRows, $batch);
-                }
+                continue;
             }
 
-            // Flush sisa buffer
-            if (! empty($buffer)) {
+            $accountId = $accountCache[$accountNumber] ?? null;
+            if ($accountId === null) {
+                $skippedNotFound++;
+                $skippedRows++;
+
+                continue;
+            }
+
+            // Sanitasi tgkhari: unsigned smallint (0-65535)
+            $tgkhari = $this->parseInt($this->getCellValue($rowData, $colTgkhari), 0, 65535);
+            $tgkmdlRaw = $this->getCellValue($rowData, $colTgkmdl);
+            $tglwoRaw = $this->getCellValue($rowData, $colTglwo);
+            $stsrec = $this->parseString($this->getCellValue($rowData, $colStsrec), 'A');
+            $stsacc = $this->parseString($this->getCellValue($rowData, $colStsacc));
+            $tgleffRaw = $this->getCellValue($rowData, $colTgleff);
+            $tglexpRaw = $this->getCellValue($rowData, $colTglexp);
+            $ppkaRaw = $this->getCellValue($rowData, $colPpka);
+
+            $buffer[] = [
+                'financing_account_id' => $accountId,
+                'period' => $period,
+                'outstanding_balance' => (float) ($this->getCellValue($rowData, $colOsmdlc, 0)),
+                'ppka' => $ppkaRaw !== null && $ppkaRaw !== '' ? (float) $ppkaRaw : null,
+                'collectibility' => (int) ($this->getCellValue($rowData, $colColbaru, 1)),
+                'tgkhari' => $tgkhari,
+                'tgkmdl' => $tgkmdlRaw !== null && $tgkmdlRaw !== '' ? (float) $tgkmdlRaw : null,
+                'writeoff_date' => $this->parseDate($tglwoRaw),
+                'financing_status' => strtoupper($stsrec),
+                'writeoff_status' => strtoupper($stsacc) === 'W' ? 'W' : null,
+                'origination_date' => $this->parseDate($tgleffRaw),
+                'maturity_date' => $this->parseDate($tglexpRaw),
+                'upload_batch_id' => $batch->id,
+                'created_at' => now()->toDateTimeString(),
+                'updated_at' => now()->toDateTimeString(),
+            ];
+
+            if (count($buffer) >= self::BATCH_SIZE) {
                 $this->flushBuffer($buffer, $importedRows, $skippedRows, $duplicateRows, $batch);
             }
-
-            $this->closeReader($reader);
-
-            // Ringkas error_summary
-            $errorSummary = [];
-            if ($skippedNotFound > 0) {
-                $errorSummary[] = "account_number tidak ditemukan di financing_accounts: {$skippedNotFound} baris di-skip. Upload data master financing_accounts terlebih dahulu.";
-            }
-            if ($skippedNotFound > 0) {
-                $errorSummary[] = [
-                    'row' => 'summary',
-                    'field' => 'account_not_found',
-                    'value' => $skippedNotFound,
-                    'error' => "{$skippedNotFound} baris dilewati karena nomor kontrak tidak ditemukan di master data. Pastikan upload data master (Pembiayaan Aktif) sudah dilakukan terlebih dahulu.",
-                ];
-            }
-            if ($duplicateRows > 0) {
-                $errorSummary[] = [
-                    'row' => 'summary',
-                    'field' => 'duplicate_data',
-                    'value' => $duplicateRows,
-                    'error' => "{$duplicateRows} baris duplikat dilewati (kombinasi nokontrak+periode sudah ada di database atau terduplikasi dalam file). Data existing tidak ditimpa.",
-                ];
-            }
-
-            $batch->update([
-                'status' => UploadBatchStatus::Done,
-                'total_rows' => $processedRows,
-                'imported_rows' => $importedRows,
-                'failed_rows' => count($errorSummary),
-                'skipped_rows' => $skippedRows,
-                'processed_rows' => $processedRows,
-                'error_summary' => $errorSummary ?: null,
-                'progress_log' => [
-                    'finished_at' => now()->toDateTimeString(),
-                    'total' => $processedRows,
-                    'imported' => $importedRows,
-                    'skipped' => $skippedRows,
-                    'skipped_not_found' => $skippedNotFound,
-                    'skipped_duplicates' => $duplicateRows,
-                ],
-            ]);
-
-            $this->completeProgress("Upload selesai! {$importedRows} baris berhasil diimpor".
-                ($skippedNotFound > 0 ? ", {$skippedNotFound} akun tidak ditemukan" : '').
-                ($duplicateRows > 0 ? ", {$duplicateRows} duplikat" : ''));
-
-        } catch (Throwable $e) {
-            \Log::error('ProcessFinancingPeriodUploadJob: Critical failure', [
-                'batch_id' => $this->batchId,
-                'file_path' => $this->filePath,
-                'error' => $e->getMessage(),
-                'error_code' => $e->getCode(),
-                'processed_rows' => $processedRows ?? 0,
-                'imported_rows' => $importedRows ?? 0,
-                'stack_trace' => $e->getTraceAsString(),
-            ]);
-
-            $batch->update([
-                'status' => UploadBatchStatus::Failed,
-                'error_summary' => [[
-                    'row' => 'system',
-                    'field' => 'critical_error',
-                    'value' => '',
-                    'error' => $e->getMessage(),
-                    'details' => [
-                        'processed_rows' => $processedRows ?? 0,
-                        'imported_rows' => $importedRows ?? 0,
-                    ],
-                ]],
-            ]);
-            $this->failProgress("Upload gagal: {$e->getMessage()}");
-            throw $e;
         }
+
+        // Flush sisa buffer
+        if (! empty($buffer)) {
+            $this->flushBuffer($buffer, $importedRows, $skippedRows, $duplicateRows, $batch);
+        }
+
+        $this->closeReader($reader);
+
+        // Ringkas error_summary
+        $errorSummary = [];
+        if ($skippedNotFound > 0) {
+            $errorSummary[] = "account_number tidak ditemukan di financing_accounts: {$skippedNotFound} baris di-skip. Upload data master financing_accounts terlebih dahulu.";
+        }
+        if ($duplicateRows > 0) {
+            $errorSummary[] = [
+                'row' => 'summary',
+                'field' => 'duplicate_data',
+                'value' => $duplicateRows,
+                'error' => "{$duplicateRows} baris duplikat dilewati (kombinasi nokontrak+periode sudah ada di database atau terduplikasi dalam file). Data existing tidak ditimpa.",
+            ];
+        }
+
+        $batch->update([
+            'status' => UploadBatchStatus::Done,
+            'total_rows' => $processedRows,
+            'imported_rows' => $importedRows,
+            'failed_rows' => count($errorSummary),
+            'skipped_rows' => $skippedRows,
+            'processed_rows' => $processedRows,
+            'error_summary' => $errorSummary ?: null,
+            'progress_log' => [
+                'finished_at' => now()->toDateTimeString(),
+                'total' => $processedRows,
+                'imported' => $importedRows,
+                'skipped' => $skippedRows,
+                'skipped_not_found' => $skippedNotFound,
+                'skipped_duplicates' => $duplicateRows,
+            ],
+        ]);
+
+        $this->completeProgress("Upload selesai! {$importedRows} baris berhasil diimpor".
+            ($skippedNotFound > 0 ? ", {$skippedNotFound} akun tidak ditemukan" : '').
+            ($duplicateRows > 0 ? ", {$duplicateRows} duplikat" : ''));
     }
 
     /**
      * Flush buffer akumulasi baris ke tabel financing_account_periods.
      *
      * Menggunakan LOAD DATA LOCAL INFILE untuk kecepatan maksimal (20-100x lebih cepat
-     * dari INSERT批量). Fallback ke INSERT per baris jika LOAD DATA gagal.
+     * dari INSERT batch). Fallback ke INSERT per baris jika LOAD DATA gagal.
      */
     private function flushBuffer(array &$buffer, int &$importedRows, int &$skippedRows, int &$duplicateRows, FinancingUploadBatch $batch): void
     {

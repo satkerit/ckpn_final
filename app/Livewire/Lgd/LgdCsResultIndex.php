@@ -169,6 +169,8 @@ class LgdCsResultIndex extends Component
      */
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', LgdCollateralShortfallResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -233,6 +235,8 @@ class LgdCsResultIndex extends Component
      */
     public function rekalkulasi(): void
     {
+        $this->authorize('create', LgdCollateralShortfallResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {
@@ -294,6 +298,8 @@ class LgdCsResultIndex extends Component
     /** Hapus seluruh snapshot LGD Collateral Shortfall berdasarkan periode terpilih. */
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', LgdCollateralShortfallResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {

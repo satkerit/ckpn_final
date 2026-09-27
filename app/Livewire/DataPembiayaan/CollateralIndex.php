@@ -56,6 +56,7 @@ class CollateralIndex extends Component
         $collateral = Collateral::find($this->deletingId);
 
         if ($collateral) {
+            $this->authorize('delete', $collateral);
             $collateral->delete();
             $this->dispatch('notify', type: 'success', message: 'Data jaminan berhasil dihapus.');
         }
@@ -70,6 +71,8 @@ class CollateralIndex extends Component
 
     public function hapusSemuaData(): void
     {
+        $this->authorize('deleteAny', Collateral::class);
+
         Collateral::query()->delete();
         $this->confirmingDeleteAll = false;
         $this->resetPage();

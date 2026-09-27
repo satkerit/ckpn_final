@@ -93,6 +93,8 @@ class UploadIndex extends Component
     /** Validasi & simpan batch upload untuk satu tipe. Nama method dihindarkan dari 'upload' untuk menghindari konflik dengan WithFileUploads::$wire.upload(). */
     public function processUpload(string $type): void
     {
+        $this->authorize('create', FinancingUploadBatch::class);
+
         $types = $this->getUploadTypesProperty();
 
         if (! isset($types[$type])) {
@@ -106,7 +108,7 @@ class UploadIndex extends Component
         ], [
             "{$field}.required" => 'Pilih file terlebih dahulu sebelum upload.',
             "{$field}.file" => 'File yang dipilih tidak valid.',
-            "{$field}.mimes" => 'Jenis file tidak didukung. Gunakan format .xlsx, .xls, atau .csv.',
+            "{$field}.mimes" => 'Jenis file tidak didukung. Gunakan format .xlsx atau .csv.',
             "{$field}.max" => 'Ukuran file melebihi batas maksimal '.self::MAX_FILE_SIZE_MB.' MB.',
         ]);
 

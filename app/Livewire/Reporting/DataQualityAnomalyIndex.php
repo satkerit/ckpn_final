@@ -63,6 +63,7 @@ class DataQualityAnomalyIndex extends Component
     {
         $this->confirmingResolveId = null;
         $anomaly = DataQualityAnomaly::findOrFail($id);
+        $this->authorize('update', $anomaly);
 
         if ($anomaly->is_resolved) {
             return;

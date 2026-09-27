@@ -114,6 +114,8 @@ class LgdFinalResultIndex extends Component
 
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', LgdExpectedRecoveriesResult::class);
+
         $this->confirmingAction = '';
 
         if ($this->runPeriode === '') {
@@ -125,6 +127,8 @@ class LgdFinalResultIndex extends Component
 
     public function rekalkulasiPerhitungan(): void
     {
+        $this->authorize('create', LgdExpectedRecoveriesResult::class);
+
         $this->confirmingAction = '';
 
         if ($this->runPeriode === '') {
@@ -155,6 +159,8 @@ class LgdFinalResultIndex extends Component
 
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', LgdExpectedRecoveriesResult::class);
+
         $this->confirmingAction = '';
 
         if ($this->runPeriode === '') {

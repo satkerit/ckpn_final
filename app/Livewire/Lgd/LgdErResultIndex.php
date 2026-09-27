@@ -142,6 +142,8 @@ class LgdErResultIndex extends Component
      */
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', LgdExpectedRecoveriesResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -206,6 +208,8 @@ class LgdErResultIndex extends Component
      */
     public function rekalkulasi(): void
     {
+        $this->authorize('create', LgdExpectedRecoveriesResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {
@@ -267,6 +271,8 @@ class LgdErResultIndex extends Component
     /** Hapus seluruh snapshot LGD Expected Recoveries berdasarkan periode terpilih. */
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', LgdExpectedRecoveriesResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {

@@ -109,6 +109,8 @@ class BucketIndex extends Component
 
     public function save(): void
     {
+        $this->authorize($this->editingId ? 'update' : 'create', Bucket::class);
+
         $this->validate();
 
         $data = [
@@ -140,7 +142,9 @@ class BucketIndex extends Component
     public function delete(): void
     {
         if ($this->deletingId) {
-            Bucket::findOrFail($this->deletingId)->delete();
+            $bucket = Bucket::findOrFail($this->deletingId);
+            $this->authorize('delete', $bucket);
+            $bucket->delete();
             $this->dispatch('notify', type: 'success', message: 'Bucket berhasil dihapus.');
         }
         $this->showDeleteConfirm = false;

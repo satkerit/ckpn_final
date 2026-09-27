@@ -191,6 +191,8 @@ class PdNetflowResultIndex extends Component
 
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', PdNetflowResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -249,6 +251,8 @@ class PdNetflowResultIndex extends Component
      */
     public function rekalkulasi(): void
     {
+        $this->authorize('create', PdNetflowResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {
@@ -306,6 +310,8 @@ class PdNetflowResultIndex extends Component
     /** Hapus seluruh snapshot PD Netflow berdasarkan periode terpilih. */
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', PdNetflowResult::class);
+
         $periode = trim($this->runPeriode);
 
         if ($periode === '' || ! preg_match('/^\d{6}$/', $periode)) {

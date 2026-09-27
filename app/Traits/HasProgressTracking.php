@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Traits;
 
 use App\Models\FinancingUploadBatch;
-use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -52,6 +51,11 @@ trait HasProgressTracking
      */
     protected function updateProgress(array $data = []): void
     {
+        // Guard: initializeProgress() belum dipanggil (mis. failProgress dari base job)
+        if ($this->progressKey === '') {
+            return;
+        }
+
         $this->progressData = array_merge($this->progressData, $data);
         $this->progressData['updated_at'] = now()->timestamp;
 
@@ -73,16 +77,6 @@ trait HasProgressTracking
 
         // Cache progress data for frontend polling
         Cache::put($this->progressKey, $this->progressData, now()->addMinutes(30));
-
-        // Broadcast progress update via WebSocket (if available)
-        if (function_exists('broadcast')) {
-            try {
-                Broadcast::channel("upload.{$this->progressData['upload_id']}")
-                    ->with($this->progressData);
-            } catch (\Exception $e) {
-                // Silent fail if broadcast not available
-            }
-        }
     }
 
     /**
@@ -213,40 +207,4 @@ trait HasProgressTracking
         return round($bytes, 2).' '.$units[$pow];
     }
 
-    /**
-     * Format time duration for display
-     */
-    protected function formatDuration(int $seconds): string
-    {
-        if ($seconds < 60) {
-            return $seconds.' detik';
-        } elseif ($seconds < 3600) {
-            return floor($seconds / 60).' menit '.($seconds % 60).' detik';
-        } else {
-            $hours = floor($seconds / 3600);
-            $minutes = floor(($seconds % 3600) / 60);
-
-            return $hours.' jam '.$minutes.' menit';
-        }
-    }
-
-    /**
-     * Get progress percentage as formatted string
-     */
-    protected function getProgressPercentage(): string
-    {
-        return number_format($this->progressData['percentage'] ?? 0, 1).'%';
-    }
-
-    /**
-     * Get ETA as formatted string
-     */
-    protected function getETAFormatted(): ?string
-    {
-        if (! isset($this->progressData['eta']) || $this->progressData['eta'] === null) {
-            return null;
-        }
-
-        return $this->formatDuration($this->progressData['eta']);
-    }
 }

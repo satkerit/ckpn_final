@@ -146,6 +146,8 @@ class CkpnCollectiveResultIndex extends Component
 
     public function bulkHapus(): void
     {
+        $this->authorize('deleteAny', CkpnCollectiveResult::class);
+
         $this->confirmingAction = '';
 
         $deleted = CkpnCollectiveResult::whereIn('id', $this->selectedIds)->delete();
@@ -196,8 +198,8 @@ class CkpnCollectiveResultIndex extends Component
         // Mode single: validasi pd_method periode harus cocok dengan parameter sistem. Ref: PRD Bab 12
         if (! $this->isDualPdMethod()) {
             if (! $this->validatePdMethodConsistency($periode)) {
-                return;
-            }
+            return;
+        }
         }
 
         if (! $this->pdLgdAvailable($periode)) {
@@ -259,6 +261,8 @@ class CkpnCollectiveResultIndex extends Component
      */
     public function jalankanDenganMetode(string $method): void
     {
+        $this->authorize('create', CkpnCollectiveResult::class);
+
         if (! in_array($method, ['netflow', 'migration'], true)) {
             $this->dispatch('notify', type: 'error', message: 'Metode PD tidak valid.');
 
@@ -302,6 +306,8 @@ class CkpnCollectiveResultIndex extends Component
      */
     public function jalankanPerhitungan(): void
     {
+        $this->authorize('create', CkpnCollectiveResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -366,6 +372,8 @@ class CkpnCollectiveResultIndex extends Component
      */
     public function rekalkulasi(): void
     {
+        $this->authorize('create', CkpnCollectiveResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -414,6 +422,8 @@ class CkpnCollectiveResultIndex extends Component
      */
     public function hapusPerhitungan(): void
     {
+        $this->authorize('deleteAny', CkpnCollectiveResult::class);
+
         $this->confirmingAction = '';
         $periode = trim($this->runPeriode);
 
@@ -494,6 +504,8 @@ class CkpnCollectiveResultIndex extends Component
         if ($this->deletingId === null) {
             return;
         }
+
+        $this->authorize('delete', CkpnCollectiveResult::findOrFail($this->deletingId));
 
         try {
             CkpnCollectiveResult::findOrFail($this->deletingId)->delete();

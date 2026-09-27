@@ -26,7 +26,7 @@ use Throwable;
  */
 abstract class UploadJobBase implements ShouldQueue
 {
-    use InteractsWithQueue, Queueable, SerializesModels, StreamableExcelUpload, HasProgressTracking;
+    use HasProgressTracking, InteractsWithQueue, Queueable, SerializesModels, StreamableExcelUpload;
 
     public int $tries = 3;
 
@@ -49,6 +49,12 @@ abstract class UploadJobBase implements ShouldQueue
         if ($batch->status === UploadBatchStatus::Done) {
             return;
         }
+
+        if ($batch->status === UploadBatchStatus::Processing) {
+            return;
+        }
+
+        $this->initializeProgress((string) $this->batchId);
 
         if (! file_exists($this->filePath)) {
             $this->markFailed($batch, ["File tidak ditemukan: {$this->filePath}"]);
