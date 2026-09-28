@@ -95,6 +95,16 @@
                                 <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {{ $statusClass }}">
                                     {{ $statusLabel }}
                                 </span>
+                                @if ($statusLabel === 'Gagal' && $batch->hasErrorDetails())
+                                    <button
+                                        type="button"
+                                        wire:click="openErrorModal({{ $batch->id }})"
+                                        class="mt-1 block text-xs text-red-400 hover:underline cursor-pointer"
+                                        title="Lihat detail error"
+                                    >
+                                        Lihat detail
+                                    </button>
+                                @endif
                             </td>
                             <td class="px-5 py-3 text-right text-zinc-300 tabular-nums text-xs">
                                 {{ number_format($batch->total_rows ?? 0) }}
@@ -103,13 +113,17 @@
                                 {{ number_format($batch->imported_rows ?? 0) }}
                             </td>
                             <td class="px-5 py-3 text-right tabular-nums text-xs {{ ($batch->failed_rows ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-zinc-500' }}">
-                                @if (($batch->failed_rows ?? 0) > 0)
-                                    <button 
-                                        @click="$dispatch('show-error-details', { batchId: {{ $batch->id }}, errors: {{ Js::from($batch->error_summary ?? []) }} })"
-                                        class="hover:underline cursor-pointer"
+                                @if ($batch->hasErrorDetails())
+                                    <button
+                                        type="button"
+                                        wire:click="openErrorModal({{ $batch->id }})"
+                                        class="inline-flex items-center gap-1 hover:underline cursor-pointer"
                                         title="Klik untuk melihat detail error"
                                     >
                                         {{ number_format($batch->failed_rows ?? 0) }}
+                                        <svg class="h-3 w-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                                        </svg>
                                     </button>
                                 @else
                                     {{ number_format($batch->failed_rows ?? 0) }}
@@ -141,136 +155,107 @@
         @endif
     </div>
 
-    <!-- Error Details Modal -->
-    <div 
-        x-data="errorDetailsModal()"
-        x-show="show"
-        x-cloak
-        class="fixed inset-0 z-50 overflow-y-auto"
-        aria-labelledby="modal-title" 
-        role="dialog" 
-        aria-modal="true"
-        @show-error-details.window="openModal($event.detail)"
-        @keydown.escape.window="show = false"
-    >
-        <!-- Backdrop -->
-        <div 
-            x-show="show"
-            x-transition:enter="ease-out duration-300"
-            x-transition:enter-start="opacity-0"
-            x-transition:enter-end="opacity-100"
-            x-transition:leave="ease-in duration-200"
-            x-transition:leave-start="opacity-100"
-            x-transition:leave-end="opacity-0"
-            class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-            @click="show = false"
-        ></div>
+    {{-- Modal Detail Error — server-rendered via Livewire (stabil di wire:navigate, tanpa race condition Alpine) --}}
+    @if ($showErrorModal && $this->selectedBatch !== null)
+        @php
+            $batch = $this->selectedBatch;
+            $errorEntries = collect($batch->error_summary ?? []);
+            $maxVisible = 50;
+            $visibleErrors = $errorEntries->take($maxVisible);
+        @endphp
+        <div class="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" wire:key="error-modal-{{ $batch->id }}">
+            <div class="fixed inset-0 bg-black/70" wire:click="closeErrorModal"></div>
 
-        <!-- Modal -->
-        <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-            <div 
-                x-show="show"
-                x-transition:enter="ease-out duration-300"
-                x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-                x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100"
-                x-transition:leave="ease-in duration-200"
-                x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
-                x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"
-                class="relative transform overflow-hidden rounded-lg bg-zinc-900 border border-zinc-700 px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-4xl sm:p-6"
-                @click.stop
-            >
-                <!-- Header -->
-                <div class="flex items-start justify-between mb-4">
-                    <div>
-                        <h3 class="text-lg font-semibold text-zinc-100">Detail Error Upload</h3>
-                        <p class="text-sm text-zinc-400" x-text="'Batch ID: ' + batchId"></p>
+            <div class="relative flex min-h-full items-center justify-center p-4">
+                <div class="relative w-full max-w-2xl rounded-xl border border-zinc-700 bg-zinc-900 p-6 text-left shadow-xl">
+                    <!-- Header -->
+                    <div class="mb-4 flex items-start justify-between">
+                        <div>
+                            <h3 class="text-lg font-semibold text-zinc-100">Detail Error Upload</h3>
+                            <p class="mt-0.5 text-sm text-zinc-400">
+                                {{ $typeLabels[$batch->upload_type] ?? $batch->upload_type }}
+                                &mdash; {{ $batch->filename }}
+                                @if ($batch->period)
+                                    ({{ $batch->period }})
+                                @endif
+                            </p>
+                        </div>
+                        <button type="button" wire:click="closeErrorModal" class="text-zinc-400 hover:text-zinc-200" aria-label="Tutup">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
                     </div>
-                    <button @click="show = false" class="text-zinc-400 hover:text-zinc-200">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                        </svg>
-                    </button>
-                </div>
 
-                <!-- Error Summary -->
-                <div x-show="errors.length > 0" class="mb-4">
-                    <div class="bg-rose-950/60 border border-rose-700/60 rounded-lg p-4">
-                        <div class="flex items-center gap-2 mb-2">
+                    <!-- Error Summary -->
+                    <div class="mb-4 rounded-lg border border-rose-700/60 bg-rose-950/60 p-4">
+                        <div class="mb-1 flex items-center gap-2">
                             <svg class="h-5 w-5 text-rose-400" fill="currentColor" viewBox="0 0 20 20">
                                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
                             </svg>
-                            <span class="text-sm font-medium text-rose-300" x-text="'Total ' + errors.length + ' error ditemukan'"></span>
+                            <span class="text-sm font-medium text-rose-300">
+                                @if ($errorEntries->isNotEmpty())
+                                    Total {{ number_format($errorEntries->count()) }} catatan error
+                                @else
+                                    {{ number_format($batch->failed_rows ?? 0) }} baris gagal
+                                @endif
+                            </span>
                         </div>
                         <div class="text-xs text-rose-200">
                             Silakan perbaiki error berikut dan upload ulang file Anda.
                         </div>
                     </div>
-                </div>
 
-                <!-- Error List -->
-                <div class="max-h-96 overflow-y-auto">
-                    <div x-show="errors.length === 0" class="text-center py-8 text-zinc-400">
-                        Tidak ada error detail tersedia.
-                    </div>
-
-                    <div x-show="errors.length > 0" class="space-y-2">
-                        <template x-for="(error, index) in errors" :key="index">
-                            <div class="border border-zinc-700 rounded-lg p-3 bg-zinc-800/50">
-                                <div class="flex items-start justify-between gap-4">
-                                    <div class="flex-1 min-w-0">
-                                        {{-- Handle format object {row, field, error} --}}
-                                        <template x-if="typeof error === 'object' && error !== null">
-                                            <div>
-                                                <div class="flex items-center gap-2 mb-1">
-                                                    <span 
-                                                        x-show="error.row"
-                                                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800" 
-                                                        x-text="'Baris ' + error.row"
-                                                    ></span>
-                                                    <span 
-                                                        x-show="error.field"
-                                                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800" 
-                                                        x-text="error.field"
-                                                    ></span>
-                                                </div>
-                                                <p class="text-sm text-zinc-200 mb-1" x-text="error.error || 'Unknown error'"></p>
-                                                <p class="text-xs text-zinc-400" x-show="error.value != null && error.value !== ''" x-text="'Nilai: ' + error.value"></p>
-                                            </div>
-                                        </template>
-                                        {{-- Fallback: format string biasa --}}
-                                        <template x-if="typeof error === 'string'">
-                                            <p class="text-sm text-zinc-200" x-text="error"></p>
-                                        </template>
+                    <!-- Error List -->
+                    <div class="max-h-96 space-y-2 overflow-y-auto">
+                        @forelse ($visibleErrors as $index => $error)
+                            <div class="rounded-lg border border-zinc-700 bg-zinc-800/50 p-3">
+                                @if (is_array($error))
+                                    <div class="mb-1 flex flex-wrap items-center gap-2">
+                                        @if (isset($error['row']) && $error['row'] !== null && $error['row'] !== '')
+                                            <span class="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-red-100 text-red-800">
+                                                Baris {{ $error['row'] }}
+                                            </span>
+                                        @endif
+                                        @if (isset($error['field']) && $error['field'] !== null && $error['field'] !== '' && $error['field'] !== 'general')
+                                            <span class="inline-flex rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800">
+                                                {{ $error['field'] }}
+                                            </span>
+                                        @endif
                                     </div>
-                                </div>
+                                    <p class="mb-1 text-sm text-zinc-200">{{ $error['error'] ?? 'Terjadi kesalahan tidak diketahui' }}</p>
+                                    @if (isset($error['value']) && $error['value'] !== null && $error['value'] !== '')
+                                        <p class="text-xs text-zinc-400">Nilai: {{ $error['value'] }}</p>
+                                    @endif
+                                @else
+                                    <p class="text-sm text-zinc-200">{{ is_string($error) ? $error : json_encode($error) }}</p>
+                                @endif
                             </div>
-                        </template>
-                    </div>
-                </div>
+                        @empty
+                            <div class="py-8 text-center text-zinc-400">
+                                Tidak ada catatan error detail untuk batch ini.
+                            </div>
+                        @endforelse
 
-                <!-- Footer -->
-                <div class="mt-6 flex justify-end">
-                    <button @click="show = false" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-sm font-medium rounded-lg transition-colors">
-                        Tutup
-                    </button>
+                        @if ($errorEntries->count() > $maxVisible)
+                            <p class="pt-2 text-center text-xs text-zinc-500">
+                                Menampilkan {{ $maxVisible }} dari {{ number_format($errorEntries->count()) }} catatan error.
+                            </p>
+                        @endif
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="mt-6 flex justify-end">
+                        <button
+                            type="button"
+                            wire:click="closeErrorModal"
+                            class="rounded-lg bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-600"
+                        >
+                            Tutup
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
+    @endif
 </div>
-
-<script>
-function errorDetailsModal() {
-    return {
-        show: false,
-        batchId: null,
-        errors: [],
-        
-        openModal(data) {
-            this.batchId = data.batchId;
-            this.errors = data.errors || [];
-            this.show = true;
-        }
-    }
-}
-</script>

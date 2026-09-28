@@ -78,7 +78,22 @@ trait HasProgressTracking
         }
 
         // Cache progress data for frontend polling
-        Cache::put($this->progressKey, $this->progressData, now()->addMinutes(30));
+        $this->cacheProgress(30);
+    }
+
+    /**
+     * Simpan data progress ke cache dengan proteksi error.
+     *
+     * Kegagalan progress tracking TIDAK boleh menghentikan proses upload —
+     * baris tetap diproses walau penulisan progress gagal.
+     */
+    private function cacheProgress(int $minutes): void
+    {
+        try {
+            Cache::put($this->progressKey, $this->progressData, now()->addMinutes($minutes));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**
@@ -126,20 +141,25 @@ trait HasProgressTracking
 
         // Also update the batch record if available
         if (property_exists($this, 'batchId') && $this->batchId) {
-            $batch = FinancingUploadBatch::find($this->batchId);
-            if ($batch) {
-                $batch->update([
-                    'processed_rows' => $processedRows,
-                    'imported_rows' => $importedRows,
-                    'skipped_rows' => $skippedRows,
-                    'failed_rows' => $failedRows,
-                    'progress_log' => array_merge($batch->progress_log ?? [], [
-                        'last_update' => now()->toDateTimeString(),
-                        'percentage' => $this->progressData['percentage'],
-                        'speed' => $this->progressData['speed'],
-                        'eta' => $this->progressData['eta'],
-                    ]),
-                ]);
+            try {
+                $batch = FinancingUploadBatch::find($this->batchId);
+                if ($batch) {
+                    $batch->update([
+                        'processed_rows' => $processedRows,
+                        'imported_rows' => $importedRows,
+                        'skipped_rows' => $skippedRows,
+                        'failed_rows' => $failedRows,
+                        'progress_log' => array_merge($batch->progress_log ?? [], [
+                            'last_update' => now()->toDateTimeString(),
+                            'percentage' => $this->progressData['percentage'],
+                            'speed' => $this->progressData['speed'],
+                            'eta' => $this->progressData['eta'],
+                        ]),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                // Jangan gagalkan loop upload hanya karena update snapshot progress gagal
+                report($e);
             }
         }
     }
@@ -160,7 +180,7 @@ trait HasProgressTracking
         ]);
 
         // Keep cache for a bit longer to show completion
-        Cache::put($this->progressKey, $this->progressData, now()->addMinutes(60));
+        $this->cacheProgress(60);
     }
 
     /**
@@ -176,7 +196,7 @@ trait HasProgressTracking
         ]);
 
         // Keep cache for debugging
-        Cache::put($this->progressKey, $this->progressData, now()->addHours(2));
+        $this->cacheProgress(120);
     }
 
     /**

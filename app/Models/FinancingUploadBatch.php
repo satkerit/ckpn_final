@@ -51,6 +51,12 @@ class FinancingUploadBatch extends Model
         return $this->belongsTo(User::class, 'uploaded_by_user_id');
     }
 
+    /** True bila batch memiliki detail error yang bisa ditampilkan (status gagal atau ada error_summary). */
+    public function hasErrorDetails(): bool
+    {
+        return ! empty($this->error_summary) || ($this->failed_rows ?? 0) > 0;
+    }
+
     public function accountPeriods(): HasMany
     {
         return $this->hasMany(FinancingAccountPeriod::class, 'upload_batch_id');

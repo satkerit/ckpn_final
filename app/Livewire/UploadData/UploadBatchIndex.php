@@ -108,7 +108,7 @@ class UploadBatchIndex extends Component
                 ->where('period', 'like', "%{$this->search}%")
                 ->orWhere('upload_type', 'like', "%{$this->search}%")
                 ->orWhere('status', 'like', "%{$this->search}%")
-                ->orWhere('file_name', 'like', "%{$this->search}%")
+                ->orWhere('filename', 'like', "%{$this->search}%")
         ));
 
         $batches = $query->paginate(20);

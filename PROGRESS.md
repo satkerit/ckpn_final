@@ -31,6 +31,22 @@
   - **Modal template**: tambah branch `x-if` untuk handle format string sebagai fallback (backward compat data lama di DB).
 - File utama: `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`
 
+## [2026-09-28] Perbaikan Klik Detail Error pada Riwayat Upload
+
+- Status: Done
+- Modul: Upload Data — Riwayat Upload (UploadBatchIndex)
+- Ref PRD: Bab 3, Bab 7.3
+- Perubahan:
+  - Mengubah modal detail error dari berbasis Alpine dispatch (`$dispatch('show-error-details')` + script JS inline) menjadi modal server-rendered Livewire murni (`$showErrorModal`, `$selectedBatchId`, `openErrorModal()`, `closeErrorModal()`). Hal ini mengatasi:
+    1. Race condition JS function pada navigasi `wire:navigate` (script tidak selalu dijalankan ulang).
+    2. Kerusakan escaping HTML saat batch memiliki ribuan entri error di atribut `@click`.
+  - Tombol klik detail error kini aktif tidak hanya saat `failed_rows > 0`, melainkan untuk seluruh batch yang memiliki `error_summary` atau berstatus `Failed` (ditambah tombol "Lihat detail" langsung pada badge status Gagal).
+  - Menambahkan method `hasErrorDetails()` pada model `FinancingUploadBatch`.
+  - Menambahkan CSS rule `[x-cloak] { display: none !important; }` pada `resources/css/app.css`.
+  - Memperbaiki bug kolom pencarian `file_name` -> `filename` pada query Livewire.
+- File utama: `app/Livewire/UploadData/UploadBatchIndex.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`, `app/Models/FinancingUploadBatch.php`, `resources/css/app.css`
+- Verifikasi: pint PASS; test suite PASS; `php artisan view:cache` PASS.
+
 ## [2026-09-28] Perbaikan Detail Pesan Error Upload
 
 - Status: Done

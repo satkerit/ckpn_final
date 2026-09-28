@@ -136,50 +136,57 @@ class UploadProcessorService
         foreach ($this->streamRows($reader) as $rowNum => $rowData) {
             $processedRows++;
 
-            $accountNumber = $this->parseString($this->getCellValue($rowData, $colAccount));
-            if ($accountNumber === '') {
-                $skippedRows++;
-                $errors[] = [
-                    'row' => $rowNum + 1,
-                    'field' => 'account_number',
-                    'error' => 'Nomor kontrak tidak boleh kosong',
+            // Proteksi per baris: error pada satu baris TIDAK menghentikan upload,
+            // baris bermasalah dilewati lalu lanjut ke baris berikutnya.
+            try {
+                $accountNumber = $this->parseString($this->getCellValue($rowData, $colAccount));
+                if ($accountNumber === '') {
+                    $skippedRows++;
+                    $errors[] = [
+                        'row' => $rowNum + 1,
+                        'field' => 'account_number',
+                        'error' => 'Nomor kontrak tidak boleh kosong',
+                    ];
+
+                    continue;
+                }
+
+                $usageTypeRaw = $this->getCellValue($rowData, $colUsage);
+                $usageType = null;
+                if ($usageTypeRaw !== null && $usageTypeRaw !== '') {
+                    $usageType = UsageType::tryFrom((int) $usageTypeRaw);
+                }
+
+                $customerName = $this->parseString($this->getCellValue($rowData, $colCustomer));
+                $productCode = $this->parseString($this->getCellValue($rowData, $colProduct));
+                $akadCode = $this->parseString($this->getCellValue($rowData, $colAkad));
+                $officeCode = $this->parseString($this->getCellValue($rowData, $colOffice));
+                $sector = $this->parseString($this->getCellValue($rowData, $colSector));
+
+                $buffer[] = [
+                    'account_number' => $accountNumber,
+                    'customer_name' => $customerName !== '' ? mb_substr($customerName, 0, 255) : null,
+                    'product_code' => $productCode !== '' ? mb_substr($productCode, 0, 50) : null,
+                    'akad_code' => $akadCode !== '' ? mb_substr($akadCode, 0, 50) : null,
+                    'office_code' => $officeCode !== '' ? mb_substr($officeCode, 0, 20) : null,
+                    'economic_sector' => $sector !== '' ? mb_substr($sector, 0, 100) : null,
+                    'usage_type' => $usageType?->value,
+                    'is_active' => true,
+                    'created_at' => now()->toDateTimeString(),
+                    'updated_at' => now()->toDateTimeString(),
                 ];
 
-                continue;
-            }
+                if (count($buffer) >= $batchSize) {
+                    $this->flushActiveFinancingBuffer($buffer, $importedRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
 
-            $usageTypeRaw = $this->getCellValue($rowData, $colUsage);
-            $usageType = null;
-            if ($usageTypeRaw !== null && $usageTypeRaw !== '') {
-                $usageType = UsageType::tryFrom((int) $usageTypeRaw);
-            }
-
-            $customerName = $this->parseString($this->getCellValue($rowData, $colCustomer));
-            $productCode = $this->parseString($this->getCellValue($rowData, $colProduct));
-            $akadCode = $this->parseString($this->getCellValue($rowData, $colAkad));
-            $officeCode = $this->parseString($this->getCellValue($rowData, $colOffice));
-            $sector = $this->parseString($this->getCellValue($rowData, $colSector));
-
-            $buffer[] = [
-                'account_number' => $accountNumber,
-                'customer_name' => $customerName !== '' ? mb_substr($customerName, 0, 255) : null,
-                'product_code' => $productCode !== '' ? mb_substr($productCode, 0, 50) : null,
-                'akad_code' => $akadCode !== '' ? mb_substr($akadCode, 0, 50) : null,
-                'office_code' => $officeCode !== '' ? mb_substr($officeCode, 0, 20) : null,
-                'economic_sector' => $sector !== '' ? mb_substr($sector, 0, 100) : null,
-                'usage_type' => $usageType?->value,
-                'is_active' => true,
-                'created_at' => now()->toDateTimeString(),
-                'updated_at' => now()->toDateTimeString(),
-            ];
-
-            if (count($buffer) >= $batchSize) {
-                $this->flushActiveFinancingBuffer($buffer, $importedRows, $errors);
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
-            }
-
-            if ($processedRows % 250 === 0) {
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                if ($processedRows % 250 === 0) {
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
+            } catch (Throwable $e) {
+                $skippedRows++;
+                $this->recordRowFailure($errors, $rowNum + 1, $e);
             }
         }
 
@@ -278,6 +285,7 @@ class UploadProcessorService
         $skippedNotFound = 0;
         $duplicateRows = 0;
         $processedRows = 0;
+        $errors = [];
         $buffer = [];
         $batchSize = 2000; // Batch aman & cepat untuk memory & query placeholder limits
 
@@ -302,76 +310,83 @@ class UploadProcessorService
         foreach ($this->streamRows($reader) as $rowNum => $rowData) {
             $processedRows++;
 
-            $accountNumber = $this->parseString($this->getCellValue($rowData, $colNokontrak));
-            $period = $this->parseString($this->getCellValue($rowData, $colPeriode));
+            // Proteksi per baris: error pada satu baris TIDAK menghentikan upload,
+            // baris bermasalah dilewati lalu lanjut ke baris berikutnya.
+            try {
+                $accountNumber = $this->parseString($this->getCellValue($rowData, $colNokontrak));
+                $period = $this->parseString($this->getCellValue($rowData, $colPeriode));
 
-            if ($accountNumber === '' || $period === '') {
+                if ($accountNumber === '' || $period === '') {
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                if ($detectedPeriod === null) {
+                    $detectedPeriod = $period;
+                }
+
+                $accountId = $accountCache[$accountNumber] ?? null;
+                if ($accountId === null) {
+                    $skippedNotFound++;
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                // DEDUP RULE 1: Cek duplikasi nokontrak + periode di dalam file yang sedang di-upload
+                $uniqueKey = $accountId.'|'.$period;
+                if (isset($seenFileKeys[$uniqueKey])) {
+                    $duplicateRows++;
+                    $skippedRows++;
+
+                    continue;
+                }
+                $seenFileKeys[$uniqueKey] = true;
+
+                $tgkhari = $this->parseInt($this->getCellValue($rowData, $colTgkhari), 0, 65535);
+                $tgkmdlRaw = $this->getCellValue($rowData, $colTgkmdl);
+                $tglwoRaw = $this->getCellValue($rowData, $colTglwo);
+                $stsrec = $this->parseString($this->getCellValue($rowData, $colStsrec), 'A');
+                $stsacc = $this->parseString($this->getCellValue($rowData, $colStsacc));
+                $tgleffRaw = $this->getCellValue($rowData, $colTgleff);
+                $tglexpRaw = $this->getCellValue($rowData, $colTglexp);
+                $ppkaRaw = $this->getCellValue($rowData, $colPpka);
+
+                $buffer[] = [
+                    'financing_account_id' => $accountId,
+                    'period' => $period,
+                    'outstanding_balance' => (float) ($this->getCellValue($rowData, $colOsmdlc, 0)),
+                    'ppka' => $ppkaRaw !== null && $ppkaRaw !== '' ? (float) $ppkaRaw : null,
+                    'collectibility' => (int) ($this->getCellValue($rowData, $colColbaru, 1)),
+                    'tgkhari' => $tgkhari,
+                    'tgkmdl' => $tgkmdlRaw !== null && $tgkmdlRaw !== '' ? (float) $tgkmdlRaw : null,
+                    'writeoff_date' => $this->parseDate($tglwoRaw),
+                    'financing_status' => strtoupper($stsrec),
+                    'writeoff_status' => strtoupper($stsacc) === 'W' ? 'W' : null,
+                    'origination_date' => $this->parseDate($tgleffRaw),
+                    'maturity_date' => $this->parseDate($tglexpRaw),
+                    'upload_batch_id' => $batch->id,
+                    'created_at' => now()->toDateTimeString(),
+                    'updated_at' => now()->toDateTimeString(),
+                ];
+
+                if (count($buffer) >= $batchSize) {
+                    $this->flushHistoricalFinancingBuffer($buffer, $importedRows, $skippedRows, $duplicateRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
+
+                if ($processedRows % 500 === 0) {
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
+            } catch (Throwable $e) {
                 $skippedRows++;
-
-                continue;
-            }
-
-            if ($detectedPeriod === null) {
-                $detectedPeriod = $period;
-            }
-
-            $accountId = $accountCache[$accountNumber] ?? null;
-            if ($accountId === null) {
-                $skippedNotFound++;
-                $skippedRows++;
-
-                continue;
-            }
-
-            // DEDUP RULE 1: Cek duplikasi nokontrak + periode di dalam file yang sedang di-upload
-            $uniqueKey = $accountId.'|'.$period;
-            if (isset($seenFileKeys[$uniqueKey])) {
-                $duplicateRows++;
-                $skippedRows++;
-
-                continue;
-            }
-            $seenFileKeys[$uniqueKey] = true;
-
-            $tgkhari = $this->parseInt($this->getCellValue($rowData, $colTgkhari), 0, 65535);
-            $tgkmdlRaw = $this->getCellValue($rowData, $colTgkmdl);
-            $tglwoRaw = $this->getCellValue($rowData, $colTglwo);
-            $stsrec = $this->parseString($this->getCellValue($rowData, $colStsrec), 'A');
-            $stsacc = $this->parseString($this->getCellValue($rowData, $colStsacc));
-            $tgleffRaw = $this->getCellValue($rowData, $colTgleff);
-            $tglexpRaw = $this->getCellValue($rowData, $colTglexp);
-            $ppkaRaw = $this->getCellValue($rowData, $colPpka);
-
-            $buffer[] = [
-                'financing_account_id' => $accountId,
-                'period' => $period,
-                'outstanding_balance' => (float) ($this->getCellValue($rowData, $colOsmdlc, 0)),
-                'ppka' => $ppkaRaw !== null && $ppkaRaw !== '' ? (float) $ppkaRaw : null,
-                'collectibility' => (int) ($this->getCellValue($rowData, $colColbaru, 1)),
-                'tgkhari' => $tgkhari,
-                'tgkmdl' => $tgkmdlRaw !== null && $tgkmdlRaw !== '' ? (float) $tgkmdlRaw : null,
-                'writeoff_date' => $this->parseDate($tglwoRaw),
-                'financing_status' => strtoupper($stsrec),
-                'writeoff_status' => strtoupper($stsacc) === 'W' ? 'W' : null,
-                'origination_date' => $this->parseDate($tgleffRaw),
-                'maturity_date' => $this->parseDate($tglexpRaw),
-                'upload_batch_id' => $batch->id,
-                'created_at' => now()->toDateTimeString(),
-                'updated_at' => now()->toDateTimeString(),
-            ];
-
-            if (count($buffer) >= $batchSize) {
-                $this->flushHistoricalFinancingBuffer($buffer, $importedRows, $skippedRows, $duplicateRows);
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, 0);
-            }
-
-            if ($processedRows % 500 === 0) {
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, 0);
+                $this->recordRowFailure($errors, $rowNum + 1, $e);
             }
         }
 
         if (! empty($buffer)) {
-            $this->flushHistoricalFinancingBuffer($buffer, $importedRows, $skippedRows, $duplicateRows);
+            $this->flushHistoricalFinancingBuffer($buffer, $importedRows, $skippedRows, $duplicateRows, $errors);
         }
 
         $this->closeReader($reader);
@@ -391,6 +406,9 @@ class UploadProcessorService
                 'error' => "{$duplicateRows} baris duplikat (nokontrak sama pada periode yang sama) dilewati agar data tetap bersih dan akurat.",
             ];
         }
+
+        // Gabungkan error penyimpanan per baris (fallback flush) agar ikut terlaporkan
+        $errorSummary = array_merge($errorSummary, $errors);
 
         $batch->update([
             'period' => $batch->period ?: $detectedPeriod,
@@ -419,7 +437,7 @@ class UploadProcessorService
     /**
      * Flush buffer historis pembiayaan dengan proteksi DEDUP ketat terhadap database existing.
      */
-    private function flushHistoricalFinancingBuffer(array &$buffer, int &$importedRows, int &$skippedRows, int &$duplicateRows): void
+    private function flushHistoricalFinancingBuffer(array &$buffer, int &$importedRows, int &$skippedRows, int &$duplicateRows, array &$errors): void
     {
         if (empty($buffer)) {
             return;
@@ -460,14 +478,20 @@ class UploadProcessorService
                     DB::table('financing_account_periods')->insert($chunk);
                     $importedRows += count($chunk);
                 } catch (Throwable) {
-                    // Fallback per-row insert jika ada constraint atau deadlock
+                    // Fallback per baris: baris bermasalah dilewati, sisanya tetap masuk
                     foreach ($chunk as $singleRow) {
                         try {
                             DB::table('financing_account_periods')->insert($singleRow);
                             $importedRows++;
-                        } catch (Throwable) {
+                        } catch (Throwable $ex) {
                             $skippedRows++;
                             $duplicateRows++;
+                            $errors[] = [
+                                'row' => null,
+                                'field' => 'financing_account_id + period',
+                                'error' => $ex->getMessage(),
+                                'value' => $singleRow['financing_account_id'].'|'.$singleRow['period'],
+                            ];
                         }
                     }
                 }
@@ -510,6 +534,7 @@ class UploadProcessorService
         $skippedInvalidType = 0;
         $duplicateRows = 0;
         $processedRows = 0;
+        $errors = [];
         $buffer = [];
         $batchSize = 1000;
 
@@ -530,81 +555,88 @@ class UploadProcessorService
         foreach ($this->streamRows($reader) as $rowNum => $rowData) {
             $processedRows++;
 
-            $accountNumber = $this->parseString($this->getCellValue($rowData, $colAccount));
+            // Proteksi per baris: error pada satu baris TIDAK menghentikan upload,
+            // baris bermasalah dilewati lalu lanjut ke baris berikutnya.
+            try {
+                $accountNumber = $this->parseString($this->getCellValue($rowData, $colAccount));
 
-            // Lewati baris yang tidak punya nomor kontrak
-            if ($accountNumber === '') {
+                // Lewati baris yang tidak punya nomor kontrak
+                if ($accountNumber === '') {
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                $accountId = $accountCache[$accountNumber] ?? null;
+                if ($accountId === null) {
+                    $skippedNotFound++;
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                $typeCode = $this->parseString($this->getCellValue($rowData, $colType));
+                $typeId = $typeCache[$typeCode] ?? null;
+                if ($typeId === null) {
+                    $skippedInvalidType++;
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                $seqVal = $this->getCellValue($rowData, $colSeq);
+                $sequenceNumber = ($seqVal !== null && $seqVal !== '') ? (int) $seqVal : 1;
+
+                $collateralCode = $this->parseString($this->getCellValue($rowData, $colCode));
+
+                // Fallback noreg: sertakan sequence_number agar tiap jaminan dalam satu akun tetap unik
+                if ($collateralCode === '') {
+                    $collateralCode = 'JMN-'.$accountNumber.'-'.$sequenceNumber;
+                }
+
+                // Dedup dalam file yang sama: tolak kombinasi identik (account_id|noreg|urut)
+                $uniqueKey = $accountId.'|'.$collateralCode.'|'.$sequenceNumber;
+                if (isset($seenFileKeys[$uniqueKey])) {
+                    $duplicateRows++;
+                    $skippedRows++;
+
+                    continue;
+                }
+                $seenFileKeys[$uniqueKey] = true;
+
+                $rawActive = $this->getCellValue($rowData, $colActive);
+                $isActive = $this->parseBoolean($rawActive, true);
+
+                $buffer[] = [
+                    'financing_account_id' => $accountId,
+                    'collateral_code' => $collateralCode,
+                    'sequence_number' => $sequenceNumber,
+                    'collateral_type_id' => $typeId,
+                    'description' => $this->parseString($this->getCellValue($rowData, $colDesc)) ?: null,
+                    'appraisal_value' => $this->parseDecimal($this->getCellValue($rowData, $colAppraisal)),
+                    'estimated_sale_value' => $this->parseDecimal($this->getCellValue($rowData, $colLiquidation)),
+                    'appraised_at' => $this->parseDate($this->getCellValue($rowData, $colAppraisedAt)),
+                    'is_active' => $isActive,
+                    'created_at' => now()->toDateTimeString(),
+                    'updated_at' => now()->toDateTimeString(),
+                ];
+
+                if (count($buffer) >= $batchSize) {
+                    $this->flushCollateralBuffer($buffer, $importedRows, $skippedRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
+                }
+
+                if ($processedRows % 250 === 0) {
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
+                }
+            } catch (Throwable $e) {
                 $skippedRows++;
-
-                continue;
-            }
-
-            $accountId = $accountCache[$accountNumber] ?? null;
-            if ($accountId === null) {
-                $skippedNotFound++;
-                $skippedRows++;
-
-                continue;
-            }
-
-            $typeCode = $this->parseString($this->getCellValue($rowData, $colType));
-            $typeId = $typeCache[$typeCode] ?? null;
-            if ($typeId === null) {
-                $skippedInvalidType++;
-                $skippedRows++;
-
-                continue;
-            }
-
-            $seqVal = $this->getCellValue($rowData, $colSeq);
-            $sequenceNumber = ($seqVal !== null && $seqVal !== '') ? (int) $seqVal : 1;
-
-            $collateralCode = $this->parseString($this->getCellValue($rowData, $colCode));
-
-            // Fallback noreg: sertakan sequence_number agar tiap jaminan dalam satu akun tetap unik
-            if ($collateralCode === '') {
-                $collateralCode = 'JMN-'.$accountNumber.'-'.$sequenceNumber;
-            }
-
-            // Dedup dalam file yang sama: tolak kombinasi identik (account_id|noreg|urut)
-            $uniqueKey = $accountId.'|'.$collateralCode.'|'.$sequenceNumber;
-            if (isset($seenFileKeys[$uniqueKey])) {
-                $duplicateRows++;
-                $skippedRows++;
-
-                continue;
-            }
-            $seenFileKeys[$uniqueKey] = true;
-
-            $rawActive = $this->getCellValue($rowData, $colActive);
-            $isActive = $this->parseBoolean($rawActive, true);
-
-            $buffer[] = [
-                'financing_account_id' => $accountId,
-                'collateral_code' => $collateralCode,
-                'sequence_number' => $sequenceNumber,
-                'collateral_type_id' => $typeId,
-                'description' => $this->parseString($this->getCellValue($rowData, $colDesc)) ?: null,
-                'appraisal_value' => $this->parseDecimal($this->getCellValue($rowData, $colAppraisal)),
-                'estimated_sale_value' => $this->parseDecimal($this->getCellValue($rowData, $colLiquidation)),
-                'appraised_at' => $this->parseDate($this->getCellValue($rowData, $colAppraisedAt)),
-                'is_active' => $isActive,
-                'created_at' => now()->toDateTimeString(),
-                'updated_at' => now()->toDateTimeString(),
-            ];
-
-            if (count($buffer) >= $batchSize) {
-                $this->flushCollateralBuffer($buffer, $importedRows);
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
-            }
-
-            if ($processedRows % 250 === 0) {
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
+                $this->recordRowFailure($errors, $rowNum + 1, $e);
             }
         }
 
         if (! empty($buffer)) {
-            $this->flushCollateralBuffer($buffer, $importedRows);
+            $this->flushCollateralBuffer($buffer, $importedRows, $skippedRows, $errors);
         }
 
         $this->closeReader($reader);
@@ -633,11 +665,14 @@ class UploadProcessorService
             ];
         }
 
+        // Gabungkan error penyimpanan per baris (fallback flush) agar ikut terlaporkan
+        $errorSummary = array_merge($errorSummary, $errors);
+
         $batch->update([
             'status' => UploadBatchStatus::Done,
             'total_rows' => $processedRows,
             'imported_rows' => $importedRows,
-            'failed_rows' => $skippedNotFound + $skippedInvalidType + $duplicateRows,
+            'failed_rows' => $skippedNotFound + $skippedInvalidType + $duplicateRows + count($errors),
             'skipped_rows' => $skippedRows,
             'processed_rows' => $processedRows,
             'error_summary' => $errorSummary ?: null,
@@ -649,25 +684,52 @@ class UploadProcessorService
                 'skipped_not_found' => $skippedNotFound,
                 'skipped_invalid_type' => $skippedInvalidType,
                 'skipped_duplicates' => $duplicateRows,
+                'failed_insert' => count($errors),
             ],
         ]);
 
         $this->completeProgress("Upload data jaminan selesai! {$importedRows} data berhasil diimpor.");
     }
 
-    private function flushCollateralBuffer(array &$buffer, int &$importedRows): void
+    /**
+     * Flush buffer jaminan. Kegagalan batch TIDAK menghentikan upload:
+     * baris dicoba satu per satu, baris bermasalah dilewati & dicatat.
+     */
+    private function flushCollateralBuffer(array &$buffer, int &$importedRows, int &$skippedRows, array &$errors): void
     {
         if (empty($buffer)) {
             return;
         }
 
-        DB::table('collaterals')->upsert(
-            $buffer,
-            ['financing_account_id', 'collateral_code', 'sequence_number'],
-            ['collateral_type_id', 'description', 'appraisal_value', 'estimated_sale_value', 'appraised_at', 'is_active', 'updated_at']
-        );
+        try {
+            DB::table('collaterals')->upsert(
+                $buffer,
+                ['financing_account_id', 'collateral_code', 'sequence_number'],
+                ['collateral_type_id', 'description', 'appraisal_value', 'estimated_sale_value', 'appraised_at', 'is_active', 'updated_at']
+            );
+            $importedRows += count($buffer);
+        } catch (Throwable) {
+            // Fallback: simpan per baris agar satu baris bermasalah tidak membatalkan sisanya
+            foreach ($buffer as $item) {
+                try {
+                    DB::table('collaterals')->upsert(
+                        [$item],
+                        ['financing_account_id', 'collateral_code', 'sequence_number'],
+                        ['collateral_type_id', 'description', 'appraisal_value', 'estimated_sale_value', 'appraised_at', 'is_active', 'updated_at']
+                    );
+                    $importedRows++;
+                } catch (Throwable $ex) {
+                    $skippedRows++;
+                    $errors[] = [
+                        'row' => null,
+                        'field' => 'collateral_code',
+                        'error' => $ex->getMessage(),
+                        'value' => (string) ($item['collateral_code'] ?? ''),
+                    ];
+                }
+            }
+        }
 
-        $importedRows += count($buffer);
         $buffer = [];
     }
 
@@ -696,32 +758,38 @@ class UploadProcessorService
         foreach ($this->streamRows($reader) as $rowNum => $rowData) {
             $processedRows++;
 
-            $code = $this->parseString($this->getCellValue($rowData, $colCode));
-            if ($code === '') {
+            // Proteksi per baris: error pada satu baris TIDAK menghentikan upload.
+            try {
+                $code = $this->parseString($this->getCellValue($rowData, $colCode));
+                if ($code === '') {
+                    $skippedRows++;
+
+                    continue;
+                }
+
+                $rawActive = $this->getCellValue($rowData, $colActive);
+                $isActive = $this->parseBoolean($rawActive, true);
+
+                $buffer[] = [
+                    'code' => $code,
+                    'name' => $this->parseString($this->getCellValue($rowData, $colName)) ?: $code,
+                    'is_active' => $isActive,
+                    'created_at' => now()->toDateTimeString(),
+                    'updated_at' => now()->toDateTimeString(),
+                ];
+
+                if (count($buffer) >= $batchSize) {
+                    $this->flushOfficeBuffer($buffer, $importedRows, $skippedRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
+            } catch (Throwable $e) {
                 $skippedRows++;
-
-                continue;
-            }
-
-            $rawActive = $this->getCellValue($rowData, $colActive);
-            $isActive = $this->parseBoolean($rawActive, true);
-
-            $buffer[] = [
-                'code' => $code,
-                'name' => $this->parseString($this->getCellValue($rowData, $colName)) ?: $code,
-                'is_active' => $isActive,
-                'created_at' => now()->toDateTimeString(),
-                'updated_at' => now()->toDateTimeString(),
-            ];
-
-            if (count($buffer) >= $batchSize) {
-                $this->flushOfficeBuffer($buffer, $importedRows, $errors);
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                $this->recordRowFailure($errors, $rowNum + 1, $e);
             }
         }
 
         if (! empty($buffer)) {
-            $this->flushOfficeBuffer($buffer, $importedRows, $errors);
+            $this->flushOfficeBuffer($buffer, $importedRows, $skippedRows, $errors);
         }
 
         $this->closeReader($reader);
@@ -746,7 +814,11 @@ class UploadProcessorService
         $this->completeProgress("Upload master kantor selesai! {$importedRows} kantor berhasil diimpor.");
     }
 
-    private function flushOfficeBuffer(array &$buffer, int &$importedRows, array &$errors): void
+    /**
+     * Flush buffer kantor. Kegagalan batch TIDAK menghentikan upload:
+     * baris dicoba satu per satu, baris bermasalah dilewati & dicatat.
+     */
+    private function flushOfficeBuffer(array &$buffer, int &$importedRows, int &$skippedRows, array &$errors): void
     {
         if (empty($buffer)) {
             return;
@@ -759,12 +831,26 @@ class UploadProcessorService
                 ['name', 'is_active', 'updated_at']
             );
             $importedRows += count($buffer);
-        } catch (Throwable $e) {
-            $errors[] = [
-                'row' => null,
-                'field' => 'batch',
-                'error' => 'Batch insert gagal: '.$e->getMessage(),
-            ];
+        } catch (Throwable) {
+            // Fallback: simpan per baris agar satu baris bermasalah tidak membatalkan sisanya
+            foreach ($buffer as $item) {
+                try {
+                    DB::table('financing_offices')->upsert(
+                        [$item],
+                        ['code'],
+                        ['name', 'is_active', 'updated_at']
+                    );
+                    $importedRows++;
+                } catch (Throwable $ex) {
+                    $skippedRows++;
+                    $errors[] = [
+                        'row' => null,
+                        'field' => 'code',
+                        'error' => $ex->getMessage(),
+                        'value' => (string) ($item['code'] ?? ''),
+                    ];
+                }
+            }
         }
 
         $buffer = [];
@@ -796,46 +882,52 @@ class UploadProcessorService
         foreach ($this->streamRows($reader) as $rowNum => $rowData) {
             $processedRows++;
 
-            $code = $this->parseString($this->getCellValue($rowData, $colCode));
-            if ($code === '') {
-                $skippedRows++;
+            // Proteksi per baris: error pada satu baris TIDAK menghentikan upload.
+            try {
+                $code = $this->parseString($this->getCellValue($rowData, $colCode));
+                if ($code === '') {
+                    $skippedRows++;
 
-                continue;
-            }
+                    continue;
+                }
 
-            $rawActive = $this->getCellValue($rowData, $colActive);
-            $isActive = $this->parseBoolean($rawActive, true);
+                $rawActive = $this->getCellValue($rowData, $colActive);
+                $isActive = $this->parseBoolean($rawActive, true);
 
-            $rateRaw = $this->getCellValue($rowData, $colRate);
-            $rate = $this->parseDecimal($rateRaw);
+                $rateRaw = $this->getCellValue($rowData, $colRate);
+                $rate = $this->parseDecimal($rateRaw);
 
-            if ($rate !== null && ((float) $rate < 0 || (float) $rate > 1)) {
-                $errors[] = [
-                    'row' => $rowNum + 1,
-                    'field' => 'liquidation_discount_rate',
-                    'error' => 'Nilai harus antara 0 dan 1',
-                    'value' => (string) $rate,
+                if ($rate !== null && ((float) $rate < 0 || (float) $rate > 1)) {
+                    $errors[] = [
+                        'row' => $rowNum + 1,
+                        'field' => 'liquidation_discount_rate',
+                        'error' => 'Nilai harus antara 0 dan 1',
+                        'value' => (string) $rate,
+                    ];
+                    $rate = null;
+                }
+
+                $buffer[] = [
+                    'code' => $code,
+                    'name' => $this->parseString($this->getCellValue($rowData, $colName)) ?: $code,
+                    'liquidation_discount_rate' => $rate,
+                    'is_active' => $isActive,
+                    'created_at' => now()->toDateTimeString(),
+                    'updated_at' => now()->toDateTimeString(),
                 ];
-                $rate = null;
-            }
 
-            $buffer[] = [
-                'code' => $code,
-                'name' => $this->parseString($this->getCellValue($rowData, $colName)) ?: $code,
-                'liquidation_discount_rate' => $rate,
-                'is_active' => $isActive,
-                'created_at' => now()->toDateTimeString(),
-                'updated_at' => now()->toDateTimeString(),
-            ];
-
-            if (count($buffer) >= $batchSize) {
-                $this->flushCollateralTypeBuffer($buffer, $importedRows, $errors);
-                $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                if (count($buffer) >= $batchSize) {
+                    $this->flushCollateralTypeBuffer($buffer, $importedRows, $skippedRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                }
+            } catch (Throwable $e) {
+                $skippedRows++;
+                $this->recordRowFailure($errors, $rowNum + 1, $e);
             }
         }
 
         if (! empty($buffer)) {
-            $this->flushCollateralTypeBuffer($buffer, $importedRows, $errors);
+            $this->flushCollateralTypeBuffer($buffer, $importedRows, $skippedRows, $errors);
         }
 
         $this->closeReader($reader);
@@ -860,7 +952,11 @@ class UploadProcessorService
         $this->completeProgress("Upload master jenis jaminan selesai! {$importedRows} jenis jaminan berhasil diimpor.");
     }
 
-    private function flushCollateralTypeBuffer(array &$buffer, int &$importedRows, array &$errors): void
+    /**
+     * Flush buffer jenis jaminan. Kegagalan batch TIDAK menghentikan upload:
+     * baris dicoba satu per satu, baris bermasalah dilewati & dicatat.
+     */
+    private function flushCollateralTypeBuffer(array &$buffer, int &$importedRows, int &$skippedRows, array &$errors): void
     {
         if (empty($buffer)) {
             return;
@@ -873,12 +969,26 @@ class UploadProcessorService
                 ['name', 'liquidation_discount_rate', 'is_active', 'updated_at']
             );
             $importedRows += count($buffer);
-        } catch (Throwable $e) {
-            $errors[] = [
-                'row' => null,
-                'field' => 'batch',
-                'error' => 'Batch insert gagal: '.$e->getMessage(),
-            ];
+        } catch (Throwable) {
+            // Fallback: simpan per baris agar satu baris bermasalah tidak membatalkan sisanya
+            foreach ($buffer as $item) {
+                try {
+                    DB::table('collateral_types')->upsert(
+                        [$item],
+                        ['code'],
+                        ['name', 'liquidation_discount_rate', 'is_active', 'updated_at']
+                    );
+                    $importedRows++;
+                } catch (Throwable $ex) {
+                    $skippedRows++;
+                    $errors[] = [
+                        'row' => null,
+                        'field' => 'code',
+                        'error' => $ex->getMessage(),
+                        'value' => (string) ($item['code'] ?? ''),
+                    ];
+                }
+            }
         }
 
         $buffer = [];
@@ -902,6 +1012,29 @@ class UploadProcessorService
         ]);
 
         $this->failProgress($this->describeError($normalized[0] ?? 'Upload gagal diproses'));
+    }
+
+    /**
+     * Catat kegagalan satu baris agar proses upload tetap lanjut ke baris berikutnya.
+     * Error dicatat ke $errors (laporan batch) + log aplikasi.
+     *
+     * @param  array<int, array<string, mixed>>  $errors
+     */
+    private function recordRowFailure(array &$errors, int $rowNumber, Throwable $e): void
+    {
+        $message = $e->getMessage();
+
+        $errors[] = [
+            'row' => $rowNumber,
+            'field' => 'row',
+            'error' => $message !== '' ? $message : 'Error tidak diketahui saat memproses baris',
+        ];
+
+        Log::warning('Upload row failed, dilanjutkan ke baris berikutnya', [
+            'batch_id' => $this->batchId,
+            'row' => $rowNumber,
+            'error' => $message,
+        ]);
     }
 
     /**
