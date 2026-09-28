@@ -27,12 +27,4 @@ return new class extends Migration
                 ->comment('false = baru diimport dari historis, true = sudah diklasifikasi');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_period_classifications', function (Blueprint $table) {
-            $table->dropColumn('is_classified');
-            $table->string('classification', 20)->nullable(false)->change();
-        });
-    }
 };

@@ -31,12 +31,4 @@ return new class extends Migration
             $table->foreign('pd_bucket_id')->references('id')->on('buckets')->nullOnDelete();
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_collective_result', function (Blueprint $table) {
-            $table->dropForeign(['pd_bucket_id']);
-            $table->dropColumn(['pd_bucket_id', 'pd_quality_grade_id']);
-        });
-    }
 };

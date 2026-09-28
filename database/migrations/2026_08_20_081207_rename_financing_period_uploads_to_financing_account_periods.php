@@ -11,9 +11,4 @@ return new class extends Migration
     {
         Schema::rename('financing_period_uploads', 'financing_account_periods');
     }
-
-    public function down(): void
-    {
-        Schema::rename('financing_account_periods', 'financing_period_uploads');
-    }
 };

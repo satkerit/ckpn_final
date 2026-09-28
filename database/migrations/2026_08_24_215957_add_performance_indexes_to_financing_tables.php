@@ -37,17 +37,4 @@ return new class extends Migration
             $table->index(['akad_code', 'maturity_date'], 'fa_akad_maturity_idx');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_account_periods', function (Blueprint $table): void {
-            $table->dropIndex('fap_period_status_wo_idx');
-            $table->dropIndex('fap_writeoff_date_idx');
-        });
-
-        Schema::table('financing_accounts', function (Blueprint $table): void {
-            $table->dropIndex('fa_usage_type_idx');
-            $table->dropIndex('fa_akad_maturity_idx');
-        });
-    }
 };

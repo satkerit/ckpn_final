@@ -14,11 +14,4 @@ return new class extends Migration
             }
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_individual_result', function (Blueprint $table): void {
-            $table->boolean('is_top_n_outstanding')->default(false);
-        });
-    }
 };

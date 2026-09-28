@@ -13,11 +13,4 @@ return new class extends Migration
             $table->decimal('tgkmdl', 20, 2)->nullable()->change();
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_period_uploads', function (Blueprint $table) {
-            $table->date('tgkmdl')->nullable()->change();
-        });
-    }
 };

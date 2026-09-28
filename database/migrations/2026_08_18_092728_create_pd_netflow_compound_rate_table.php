@@ -24,12 +24,4 @@ return new class extends Migration
             $table->index('calculation_run_log_id');
         });
     }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('pd_netflow_compound_rate');
-    }
 };

@@ -25,9 +25,4 @@ return new class extends Migration
             $table->index('risk_segment_id');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('lgd_collateral_shortfall_result');
-    }
 };

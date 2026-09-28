@@ -39,33 +39,4 @@ return new class extends Migration
             $table->dropColumn(['origination_date', 'maturity_date']);
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_accounts', function (Blueprint $table): void {
-            $table->date('origination_date')->nullable()->after('usage_type');
-            $table->date('maturity_date')->nullable()->after('origination_date');
-            $table->index(['akad_code', 'maturity_date'], 'fa_akad_maturity_idx');
-        });
-
-        // Salin kembali nilai dari periode terakhir masing-masing akun
-        DB::statement(
-            'UPDATE financing_accounts fa
-             LEFT JOIN (
-                 SELECT financing_account_id, MAX(period) AS last_period
-                 FROM financing_account_periods
-                 GROUP BY financing_account_id
-             ) lp ON lp.financing_account_id = fa.id
-             LEFT JOIN financing_account_periods fap
-                 ON fap.financing_account_id = lp.financing_account_id
-                AND fap.period = lp.last_period
-             SET fa.origination_date = fap.origination_date,
-                 fa.maturity_date    = fap.maturity_date'
-        );
-
-        Schema::table('financing_account_periods', function (Blueprint $table): void {
-            $table->dropIndex('fap_period_maturity_idx');
-            $table->dropColumn(['origination_date', 'maturity_date']);
-        });
-    }
 };

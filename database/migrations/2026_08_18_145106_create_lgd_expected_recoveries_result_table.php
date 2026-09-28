@@ -28,9 +28,4 @@ return new class extends Migration
             $table->index('calculation_period');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('lgd_expected_recoveries_result');
-    }
 };

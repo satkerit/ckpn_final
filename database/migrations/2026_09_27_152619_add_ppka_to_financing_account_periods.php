@@ -23,11 +23,4 @@ return new class extends Migration
                 ->comment('Nilai PPKA (Penilaian Kualitas Aktiva) per periode untuk comparasi dengan CKPN');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_account_periods', function ($table) {
-            $table->dropColumn('ppka');
-        });
-    }
 };

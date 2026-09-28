@@ -29,9 +29,4 @@ return new class extends Migration
             $table->index('status');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('financing_upload_batches');
-    }
 };

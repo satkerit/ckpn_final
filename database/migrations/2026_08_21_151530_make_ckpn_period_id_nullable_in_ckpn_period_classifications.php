@@ -25,16 +25,4 @@ return new class extends Migration
                 ->onDelete('restrict');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_period_classifications', function (Blueprint $table) {
-            $table->dropForeign(['ckpn_period_id']);
-            $table->unsignedBigInteger('ckpn_period_id')->nullable(false)->change();
-            $table->foreign('ckpn_period_id')
-                ->references('id')
-                ->on('ckpn_periods')
-                ->onDelete('restrict');
-        });
-    }
 };

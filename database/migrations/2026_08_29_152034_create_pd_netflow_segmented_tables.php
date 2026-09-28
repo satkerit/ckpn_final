@@ -53,15 +53,4 @@ return new class extends Migration
         // 4. Tabel Konsumsi (usage_type = 3)
         $createTable('pd_netflow_konsumsi', 'pd_nf_kons');
     }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('pd_netflow_konsumsi');
-        Schema::dropIfExists('pd_netflow_investasi');
-        Schema::dropIfExists('pd_netflow_modal_kerja');
-        Schema::dropIfExists('pd_netflow_consolidated');
-    }
 };

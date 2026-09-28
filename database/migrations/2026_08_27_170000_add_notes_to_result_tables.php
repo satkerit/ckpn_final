@@ -48,15 +48,4 @@ return new class extends Migration
                 ->comment('Dasar data: sumber, pd_method, lgd_method, filter');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('pd_netflow_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('pd_migration_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('lgd_expected_recoveries_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('lgd_collateral_shortfall_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('lgd_collateral_shortfall_by_segment_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('ckpn_individual_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-        Schema::table('ckpn_collective_result', fn (Blueprint $table) => $table->dropColumn('notes'));
-    }
 };

@@ -25,9 +25,4 @@ return new class extends Migration
             $table->unique(['period', 'usage_type', 'classification'], 'uq_recon_period_type_class');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('ckpn_reconciliation_snapshots');
-    }
 };

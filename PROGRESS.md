@@ -1,3 +1,80 @@
+
+## [2026-09-28] Fix Progress Bar — Persentase Tidak Bergerak
+
+- Status: Done
+- Modul: Upload Data — UploadProcessorService + HasProgressTracking
+- Perubahan:
+  - Root cause: `initializeProgress((string) $batchId)` dipanggil tanpa `$totalRows`, sehingga `$this->totalSteps = 0` selamanya dan persentase selalu 0.
+  - Fix: di `process()`, scan cepat total baris via `countTotalRows()` (sudah ada di `StreamableExcelUpload`) sebelum `initializeProgress`. `initializeProgress((string) $batchId, $totalRows)` kini menerima total baris yang benar.
+  - Efek: `updateBatchProgress()` → `setProgress($processedRows)` → `percentage = processedRows/totalRows * 100` kini menghasilkan nilai yang akurat.
+- File: `app/Services/UploadProcessorService.php`
+
+## [2026-09-28] Fix Upload Jaminan — Dedup Benar & Fallback Noreg
+
+- Status: Done
+- Modul: Upload Data — processCollateral
+- Perubahan:
+  - Tambah in-memory dedup dengan kunci `(financing_account_id|collateral_code|sequence_number)` — satu akun **boleh** punya banyak jaminan dengan noreg yang sama asalkan no urut berbeda.
+  - Perbaiki fallback `collateral_code` kosong: dari `JMN-{account_number}` (selalu sama per akun) menjadi `JMN-{account_number}-{sequence_number}` agar setiap jaminan tetap unik.
+  - Tambah alias heading `noreg` untuk kolom `collateral_code`.
+  - `duplicateRows` dilaporkan di `error_summary` dan `progress_log.skipped_duplicates`.
+- File: `app/Services/UploadProcessorService.php`
+
+## [2026-09-28] Fix Fungsi Lihat Detail Error Upload Batch
+
+- Status: Done
+- Modul: Upload Data — UploadBatchIndex (Riwayat Upload)
+- Ref PRD: Bab 3
+- Perubahan:
+  - **UploadProcessorService**: normalisasi format `error_summary` agar semua tipe upload menyimpan error sebagai `{row, field, error, value}` — sebelumnya `flushOfficeBuffer`, `flushCollateralTypeBuffer`, `processCollateralType`, dan `processCollateral` menyimpan string biasa yang tidak bisa dibaca modal Alpine.
+  - **upload-batch-index.blade.php**: hapus `x-data=""` nested di tombol gagal (reliable issue di Alpine v3), ganti `json_encode` ke `Js::from()` untuk HTML escaping yang benar.
+  - **Modal template**: tambah branch `x-if` untuk handle format string sebagai fallback (backward compat data lama di DB).
+- File utama: `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`
+
+## [2026-09-28] Hapus Method down() pada Seluruh Migration
+
+- Status: Done
+- Modul: Database Migrations (74 file)
+- Ref PRD: —
+- Perubahan: menghapus seluruh `public function down()` (beserta PHPDoc-nya) dari 74 file migration agar migrasi satu arah (rollback tidak digunakan); 1 import `Blueprint` orphan ikut dibersihkan.
+- File utama: `database/migrations/*.php`
+- Verifikasi: `pint database/migrations` PASS (74 files); `php artisan migrate:status` OK.
+
+## [2026-09-28] Rebuild Fitur Upload Data — Tanpa Queue + Dialog Progress Bar
+
+- Status: Done
+- Modul: Upload Data Pembiayaan (semua 5 tipe) — Logika, Service, UI
+- Ref PRD: Bab 3 (Upload Data), Bab 7.3 (data quality)
+- Perubahan:
+  - **Hapus arsitektur queue**: 5 job upload (`ProcessFinancingPeriodUploadJob`, `ProcessCollateralUploadJob`, `ProcessFinancingMasterUploadJob`, `ProcessFinancingOfficeUploadJob`, `ProcessCollateralTypeUploadJob`) + `UploadJobBase` dihapus. Hosting user tanpa terminal tidak bisa jalankan `queue:work`.
+  - **UploadProcessorService** (sinkron, streaming OpenSpout, chunk bulk `upsert`/`insert`): memori konstan, `set_time_limit(1800)` + `max_execution_time`/`memory_limit` override.
+  - **Dedup ketat histori pembiayaan**: 2 lapis — in-memory `seenFileKeys` (duplikat dalam file) + cek DB existing per chunk. Nokontrak sama pada periode sama dilewati & dilaporkan di `error_summary`/`progress_log.skipped_duplicates`.
+  - **Pola dua tahap tanpa queue**: `processUpload()` (cepat: validasi + simpan file + buat batch + dispatch event `start-upload-progress`) → JS buka dialog progress, polling `/api/upload-progress/{batchId}`, lalu panggil `executeUpload($batchId)` tanpa await (background HTTP request) → UI tetap responsif.
+  - **Keamanan**: path file dibaca server-side dari kolom baru `financing_upload_batches.file_path` (bukan dari client) + `abort_unless` ownership check. Route progress API turun dari `auth:sanctum` ke `auth` (polling pakai session cookie web).
+  - **Dialog progress bar** (SweetAlert2 `window.showUploadProgress`/`updateProgress`) via Alpine listener `start-upload-progress.window` & `upload-finished.window` di `upload-index.blade.php`.
+  - **LOKASI FILE**: `LOAD DATA LOCAL INFILE` dihapus (config tidak punya `PDO::MYSQL_ATTR_LOCAL_INFILE`) — diganti bulk `upsert`/`insert` per chunk.
+- File utama: `app/Services/UploadProcessorService.php`, `app/Livewire/UploadData/UploadIndex.php`, `app/Traits/HasProgressTracking.php`, `resources/views/livewire/upload-data/upload-index.blade.php`, `app/Models/FinancingUploadBatch.php`, `database/migrations/2026_09_28_070048_add_file_path_to_financing_upload_batches_table.php`, `routes/web.php`, `database/factories/UserFactory.php`, `tests/Feature/UploadProcessorServiceTest.php`
+- Verifikasi: `./vendor/bin/pint` PASS; `php artisan test tests/Feature/UploadProcessorServiceTest.php` → **3 passed (13 assertions)** (collateral upsert, idempotency, dedup histori nokontrak+periode).
+- Catatan: `UserFactory::$password` static dihapus — cache hash lintas-test memicu `Could not verify the hashed value's configuration` (order-dependent).
+- Next / risiko: satu request sinkron panjang bisa kena timeout shared hosting pada file sangat besar; pertimbangkan chunked resume bila muncul di produksi.
+
+## [2026-09-27] Fase Perbaikan Hasil Audit Kode
+
+- Status: Done
+- Modul: Lintas Modul — Upload, Security, Dead Code, Snapshot Immutability
+- Ref PRD: Bab 3, 10, 13.2 (FR-13), 16
+- Perubahan:
+  - **Bug kritis OpenSpout**: `StreamableExcelUpload` mengakses property private `Row::$cells` (fatal error) → diganti `Row::getCells()` di `extractHeadings()` & `streamRows()`.
+  - **Deadlock/retry**: `retry_after` queue DB (1860s) dipastikan > `$timeout` job maksimum (1800s) agar job tidak di-retry sebelum selesai.
+  - **Redundansi progress**: hapus panggilan `initializeProgress()` ganda di `ProcessFinancingPeriodUploadJob` & `ProcessFinancingMasterUploadJob` (sudah dipanggil `UploadJobBase::handle()`).
+  - **Snapshot immutability**: `LgdCsResultIndex::rekalkulasi()` hanya menghapus snapshot hasil, log run lama dipertahankan sebagai history (konsisten `LgdFinalResultIndex`).
+  - **Dead code dibersihkan**: `resources/js/upload-manager.js`, `resources/views/components/upload-progress-modal.blade.php`, `resources/views/test-dialogs.blade.php`, route dev `/test-dialogs`, `resources/views/welcome.blade.php`, `storage/dbg.log`. Referensi Vite input & import `app.js` ikut dibersihkan.
+  - **Test suite** disinkronkan dengan schema & DTO terbaru (kolom `cs_total_shortfall`, konstruktor `CkpnIndividualCalculator`, otorisasi `actingAsSuperAdmin()`, dispatch async job upload).
+  - Audit findings terdokumentasi di `docs/CODE_AUDIT.md`.
+- File utama: `app/Traits/StreamableExcelUpload.php`, `app/Jobs/ProcessFinancingPeriodUploadJob.php`, `app/Jobs/ProcessFinancingMasterUploadJob.php`, `app/Livewire/Lgd/LgdCsResultIndex.php`, `routes/web.php`, `vite.config.js`, `resources/js/app.js`, `docs/CODE_AUDIT.md`
+- Verifikasi: `./vendor/bin/pint` (4 file) + `php artisan test` → **82 passed (243 assertions)**, 0 failed; `npm run build` sukses.
+- Next: tidak ada blocker.
+
 ## [2026-09-27] Implementasi OpenSpout untuk Upload Excel Hemat Memori
 
 - Status: Done

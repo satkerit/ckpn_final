@@ -143,9 +143,4 @@ return new class extends Migration
                 ADD UNIQUE KEY `calculation_parameters_usage_type_parameter_key_unique` (`usage_type`, `parameter_key`)
         ');
     }
-
-    public function down(): void
-    {
-        throw new RuntimeException('Irreversible migration — tidak dapat di-rollback.');
-    }
 };

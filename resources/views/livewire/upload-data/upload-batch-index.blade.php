@@ -105,8 +105,7 @@
                             <td class="px-5 py-3 text-right tabular-nums text-xs {{ ($batch->failed_rows ?? 0) > 0 ? 'text-red-600 font-semibold' : 'text-zinc-500' }}">
                                 @if (($batch->failed_rows ?? 0) > 0)
                                     <button 
-                                        x-data=""
-                                        @click="$dispatch('show-error-details', { batchId: {{ $batch->id }}, errors: {{ json_encode($batch->error_summary ?? []) }} })"
+                                        @click="$dispatch('show-error-details', { batchId: {{ $batch->id }}, errors: {{ Js::from($batch->error_summary ?? []) }} })"
                                         class="hover:underline cursor-pointer"
                                         title="Klik untuk melihat detail error"
                                     >
@@ -219,12 +218,29 @@
                             <div class="border border-zinc-700 rounded-lg p-3 bg-zinc-800/50">
                                 <div class="flex items-start justify-between gap-4">
                                     <div class="flex-1 min-w-0">
-                                        <div class="flex items-center gap-2 mb-1">
-                                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800" x-text="'Baris ' + error.row"></span>
-                                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800" x-text="error.field || 'Unknown Field'"></span>
-                                        </div>
-                                        <p class="text-sm text-zinc-200 mb-1" x-text="error.error || 'Unknown error'"></p>
-                                        <p class="text-xs text-zinc-400" x-show="error.value" x-text="'Nilai: ' + (error.value || '')"></p>
+                                        {{-- Handle format object {row, field, error} --}}
+                                        <template x-if="typeof error === 'object' && error !== null">
+                                            <div>
+                                                <div class="flex items-center gap-2 mb-1">
+                                                    <span 
+                                                        x-show="error.row"
+                                                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800" 
+                                                        x-text="'Baris ' + error.row"
+                                                    ></span>
+                                                    <span 
+                                                        x-show="error.field"
+                                                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800" 
+                                                        x-text="error.field"
+                                                    ></span>
+                                                </div>
+                                                <p class="text-sm text-zinc-200 mb-1" x-text="error.error || 'Unknown error'"></p>
+                                                <p class="text-xs text-zinc-400" x-show="error.value != null && error.value !== ''" x-text="'Nilai: ' + error.value"></p>
+                                            </div>
+                                        </template>
+                                        {{-- Fallback: format string biasa --}}
+                                        <template x-if="typeof error === 'string'">
+                                            <p class="text-sm text-zinc-200" x-text="error"></p>
+                                        </template>
                                     </div>
                                 </div>
                             </div>

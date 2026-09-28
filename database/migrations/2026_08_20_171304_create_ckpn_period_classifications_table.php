@@ -50,9 +50,4 @@ return new class extends Migration
             $table->index(['period', 'classification']);
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('ckpn_period_classifications');
-    }
 };

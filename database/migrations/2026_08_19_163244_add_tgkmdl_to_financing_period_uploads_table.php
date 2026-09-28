@@ -15,11 +15,4 @@ return new class extends Migration
                 ->comment('Tanggal mulai menunggak / delinquency start date');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_period_uploads', function (Blueprint $table) {
-            $table->dropColumn('tgkmdl');
-        });
-    }
 };

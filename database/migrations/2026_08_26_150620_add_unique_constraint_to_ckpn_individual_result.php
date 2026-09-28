@@ -27,11 +27,4 @@ return new class extends Migration
             $table->unique(['financing_account_id', 'calculation_period'], 'uq_individual_result_account_period');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_individual_result', function (Blueprint $table): void {
-            $table->dropUnique('uq_individual_result_account_period');
-        });
-    }
 };

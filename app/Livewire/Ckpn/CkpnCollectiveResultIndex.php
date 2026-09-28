@@ -198,8 +198,8 @@ class CkpnCollectiveResultIndex extends Component
         // Mode single: validasi pd_method periode harus cocok dengan parameter sistem. Ref: PRD Bab 12
         if (! $this->isDualPdMethod()) {
             if (! $this->validatePdMethodConsistency($periode)) {
-            return;
-        }
+                return;
+            }
         }
 
         if (! $this->pdLgdAvailable($periode)) {

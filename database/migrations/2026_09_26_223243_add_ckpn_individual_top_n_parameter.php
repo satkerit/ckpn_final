@@ -22,11 +22,4 @@ return new class extends Migration
             'updated_at' => now(),
         ]);
     }
-
-    public function down(): void
-    {
-        DB::table('calculation_parameters')
-            ->where('parameter_key', 'ckpn_individual_top_n')
-            ->delete();
-    }
 };

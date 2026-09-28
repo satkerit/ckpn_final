@@ -19,16 +19,4 @@ return new class extends Migration
             }
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('calculation_run_log', function (Blueprint $table) {
-            $table->dropColumn('usage_type');
-
-            $table->foreignId('risk_segment_id')
-                ->nullable()
-                ->constrained('risk_segments')
-                ->onDelete('restrict');
-        });
-    }
 };

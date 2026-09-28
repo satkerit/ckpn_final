@@ -28,12 +28,4 @@ return new class extends Migration
             $table->index('period');
         });
     }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('pd_netflow_bucket_movement');
-    }
 };

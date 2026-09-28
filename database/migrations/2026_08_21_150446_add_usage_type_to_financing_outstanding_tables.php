@@ -90,9 +90,4 @@ return new class extends Migration
             DB::statement("ALTER TABLE `{$table}` DROP INDEX `{$indexName}`");
         }
     }
-
-    public function down(): void
-    {
-        throw new RuntimeException('Irreversible migration — tidak dapat di-rollback.');
-    }
 };

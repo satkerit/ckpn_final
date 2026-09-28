@@ -28,9 +28,4 @@ return new class extends Migration
             $table->index('usage_type');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('financing_accounts');
-    }
 };

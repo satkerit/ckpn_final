@@ -56,24 +56,6 @@ return new class extends Migration
         }
     }
 
-    public function down(): void
-    {
-        foreach ($this->foreignKeys as $table => [$originalConstraint, $newConstraint]) {
-            Schema::table($table, function (Blueprint $blueprint) use ($table, $originalConstraint, $newConstraint): void {
-                if ($this->constraintExists($table, $newConstraint)) {
-                    $blueprint->dropForeign($newConstraint);
-                }
-
-                if ($originalConstraint !== null) {
-                    $blueprint->foreign('calculation_run_log_id', $originalConstraint)
-                        ->references('id')
-                        ->on('calculation_run_log')
-                        ->restrictOnDelete();
-                }
-            });
-        }
-    }
-
     /** Cek apakah FK constraint sudah ada di database. */
     private function constraintExists(string $table, string $constraint): bool
     {

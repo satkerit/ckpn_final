@@ -31,9 +31,4 @@ return new class extends Migration
             $table->index('is_active');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('query_templates');
-    }
 };

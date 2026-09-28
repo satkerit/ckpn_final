@@ -29,9 +29,4 @@ return new class extends Migration
             $table->index('financing_account_id');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('collaterals');
-    }
 };

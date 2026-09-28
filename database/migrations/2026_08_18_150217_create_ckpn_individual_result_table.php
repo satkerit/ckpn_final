@@ -35,9 +35,4 @@ return new class extends Migration
             // Tidak ada updated_at — snapshot immutable. Ref: AGENTS.md §4
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('ckpn_individual_result');
-    }
 };

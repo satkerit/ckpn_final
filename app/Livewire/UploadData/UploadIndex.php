@@ -90,7 +90,13 @@ class UploadIndex extends Component
         ];
     }
 
-    /** Validasi & simpan batch upload untuk satu tipe. Nama method dihindarkan dari 'upload' untuk menghindari konflik dengan WithFileUploads::$wire.upload(). */
+    /**
+     * Tahap 1 (cepat): validasi file, simpan ke disk, buat record batch,
+     * lalu kirim event ke frontend untuk membuka dialog progress bar.
+     *
+     * Proses impor berat dijalankan terpisah lewat executeUpload() agar UI
+     * dapat menampilkan progress tanpa menunggu request selesai.
+     */
     public function processUpload(string $type): void
     {
         $this->authorize('create', FinancingUploadBatch::class);
@@ -119,6 +125,7 @@ class UploadIndex extends Component
         $batch = FinancingUploadBatch::create([
             'upload_type' => $types[$type]['upload_type'],
             'filename' => $filename,
+            'file_path' => $storedPath,
             'uploaded_by_user_id' => Auth::id(),
             'uploaded_at' => now(),
             'status' => UploadBatchStatus::Pending,
@@ -129,15 +136,61 @@ class UploadIndex extends Component
             'processed_rows' => 0,
         ]);
 
-        $processor = app(UploadProcessorService::class);
-        $processor->process($batch->id, Storage::disk('local')->path($storedPath), $types[$type]['upload_type']);
+        // Reset input file agar tidak ter-upload ulang
+        $this->{$field} = null;
 
-        // Refresh batch untuk dapatkan status & statistik terbaru
+        $this->dispatch(
+            'start-upload-progress',
+            batchId: $batch->id,
+            filename: $filename,
+            typeKey: $type,
+            label: $types[$type]['label'],
+        );
+    }
+
+    /**
+     * Tahap 2 (berat): jalankan impor sinkron via UploadProcessorService.
+     * Dipanggil frontend tanpa await, sehingga dialog progress tetap responsif.
+     */
+    public function executeUpload(int $batchId): void
+    {
+        $batch = FinancingUploadBatch::findOrFail($batchId);
+
+        // Cegah path/file milik user lain diproses
+        abort_unless(
+            $batch->uploaded_by_user_id === Auth::id() || Auth::user()?->hasRole('super_admin'),
+            403,
+        );
+
+        // Guard idempotency: jangan proses ulang batch yang sudah selesai/diproses
+        if (in_array($batch->status, [UploadBatchStatus::Done, UploadBatchStatus::Processing], true)) {
+            return;
+        }
+
+        $typeKey = $this->resolveTypeKeyByUploadType($batch->upload_type);
+
+        if ($typeKey === null || $batch->file_path === null) {
+            $this->dispatch('upload-finished', success: false, message: 'Data batch tidak valid untuk diproses.');
+
+            return;
+        }
+
+        $fullPath = Storage::disk('local')->path($batch->file_path);
+
+        $exceptionMessage = '';
+
+        try {
+            app(UploadProcessorService::class)->process($batchId, $fullPath, $batch->upload_type);
+        } catch (\Throwable $e) {
+            report($e);
+            $exceptionMessage = $e->getMessage();
+        }
+
         $batch->refresh();
 
         if ($batch->status === UploadBatchStatus::Done) {
             $errorCount = count($batch->error_summary ?? []);
-            $message = "File \"{$filename}\" berhasil diproses. {$batch->imported_rows} baris diimpor";
+            $message = "File \"{$batch->filename}\" berhasil diproses. {$batch->imported_rows} baris diimpor";
 
             if ($batch->skipped_rows > 0) {
                 $message .= ", {$batch->skipped_rows} baris dilewati";
@@ -147,39 +200,57 @@ class UploadIndex extends Component
                 $message .= ", {$errorCount} error ditemukan";
             }
 
-            $this->messages[$type] = [
+            $this->messages[$typeKey] = [
                 'type' => $errorCount > 0 ? 'warning' : 'success',
                 'text' => $message.'.',
-                'details' => $errorCount > 0 ? 'Lihat detail error di halaman Riwayat Upload.' : null,
+                'errors' => $errorCount > 0 ? $this->formatErrorList($batch->error_summary ?? []) : [],
             ];
-        } elseif ($batch->status === UploadBatchStatus::Processing) {
-            $this->messages[$type] = [
-                'type' => 'info',
-                'text' => "File \"{$filename}\" sedang diproses di background.",
-                'details' => 'Refresh halaman ini atau cek Riwayat Upload untuk melihat progress.',
-            ];
-        } else {
-            $errorSummary = $batch->error_summary ?? [];
-            $mainError = '';
 
-            if (! empty($errorSummary)) {
-                $firstError = $errorSummary[0];
-                if (is_array($firstError)) {
-                    $mainError = $firstError['error'] ?? 'Unknown error';
-                } else {
-                    $mainError = $firstError;
-                }
+            $this->dispatch('upload-finished', success: true, message: $message, hasErrors: $errorCount > 0);
+        } else {
+            $mainError = $this->extractMainError($batch->error_summary ?? []);
+
+            if ($mainError === '' && $exceptionMessage !== '') {
+                $mainError = $exceptionMessage;
             }
 
-            $this->messages[$type] = [
+            $this->messages[$typeKey] = [
                 'type' => 'error',
-                'text' => "File \"{$filename}\" gagal diproses.",
-                'details' => $mainError ? "Error: {$mainError}" : 'Lihat detail di halaman Riwayat Upload.',
+                'text' => "File \"{$batch->filename}\" gagal diproses.".($mainError !== '' ? ' '.$mainError : ''),
+                'errors' => $this->formatErrorList($batch->error_summary ?? []),
             ];
+
+            $this->dispatch(
+                'upload-finished',
+                success: false,
+                message: $mainError !== '' ? $mainError : 'Upload gagal diproses. Cek detail error pada kartu upload.',
+                hasErrors: false,
+            );
+        }
+    }
+
+    /** Cari key tipe upload dari nilai upload_type batch. */
+    private function resolveTypeKeyByUploadType(string $uploadType): ?string
+    {
+        foreach ($this->getUploadTypesProperty() as $key => $type) {
+            if ($type['upload_type'] === $uploadType) {
+                return $key;
+            }
         }
 
-        // Reset field file setelah upload selesai
-        $this->{$field} = null;
+        return null;
+    }
+
+    /** Ambil pesan error utama dari error_summary batch. */
+    private function extractMainError(array $errorSummary): string
+    {
+        if ($errorSummary === []) {
+            return '';
+        }
+
+        $first = $errorSummary[0];
+
+        return is_array($first) ? (string) ($first['error'] ?? '') : (string) $first;
     }
 
     /** Clear pesan status untuk tipe upload tertentu */

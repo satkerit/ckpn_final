@@ -24,9 +24,4 @@ return new class extends Migration
             $table->index('period');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('writeoff_data');
-    }
 };

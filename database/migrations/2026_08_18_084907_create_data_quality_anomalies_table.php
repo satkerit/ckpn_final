@@ -35,9 +35,4 @@ return new class extends Migration
             $table->index('anomaly_type');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('data_quality_anomalies');
-    }
 };

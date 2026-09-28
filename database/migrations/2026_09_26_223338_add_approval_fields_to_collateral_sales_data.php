@@ -22,12 +22,4 @@ return new class extends Migration
             $table->index('approval_status', 'csd_approval_status_idx');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('collateral_sales_data', function ($table) {
-            $table->dropIndex('csd_approval_status_idx');
-            $table->dropColumn(['approval_status', 'approved_at', 'approval_notes']);
-        });
-    }
 };

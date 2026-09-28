@@ -31,9 +31,4 @@ return new class extends Migration
             $table->unique(['calculation_run_log_id', 'usage_type'], 'lgd_cs_by_segment_run_log_utype_unique');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('lgd_collateral_shortfall_by_segment_result');
-    }
 };

@@ -25,9 +25,4 @@ return new class extends Migration
             $table->index('parameter_key');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('calculation_parameters');
-    }
 };

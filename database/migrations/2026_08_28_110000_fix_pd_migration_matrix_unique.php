@@ -27,15 +27,4 @@ return new class extends Migration
             );
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('pd_migration_matrix', function (Blueprint $table): void {
-            $table->dropUnique('pd_migration_matrix_unique');
-            $table->unique(
-                ['calculation_run_log_id', 'usage_type', 'from_quality_grade_id', 'cohort_period'],
-                'pd_migration_matrix_unique'
-            );
-        });
-    }
 };

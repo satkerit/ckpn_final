@@ -58,14 +58,4 @@ return new class extends Migration
             ],
         ]);
     }
-
-    public function down(): void
-    {
-        DB::table('calculation_parameters')->whereIn('parameter_key', [
-            'pokpby_special_criteria_list',
-            'pokpby_require_maturity',
-            'pokpby_ead_field',
-            'default_ead_field',
-        ])->delete();
-    }
 };

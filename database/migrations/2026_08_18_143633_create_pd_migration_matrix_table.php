@@ -32,12 +32,4 @@ return new class extends Migration
             $table->index('cohort_period');
         });
     }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('pd_migration_matrix');
-    }
 };

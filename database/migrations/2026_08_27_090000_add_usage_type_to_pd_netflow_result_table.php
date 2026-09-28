@@ -41,9 +41,4 @@ return new class extends Migration
                     FOREIGN KEY (`calculation_run_log_id`) REFERENCES `calculation_run_log`(`id`)
         ');
     }
-
-    public function down(): void
-    {
-        throw new RuntimeException('Irreversible migration — tidak dapat di-rollback.');
-    }
 };

@@ -16,12 +16,4 @@ return new class extends Migration
             $table->index('tgkhari');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_period_uploads', function (Blueprint $table) {
-            $table->dropIndex(['tgkhari']);
-            $table->dropColumn('tgkhari');
-        });
-    }
 };

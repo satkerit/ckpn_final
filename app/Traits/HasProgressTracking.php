@@ -62,6 +62,8 @@ trait HasProgressTracking
         // Calculate percentage
         if ($this->totalSteps > 0) {
             $this->progressData['percentage'] = min(100, ($this->currentStep / $this->totalSteps) * 100);
+        } elseif (! isset($data['percentage'])) {
+            $this->progressData['percentage'] = 0;
         }
 
         // Calculate speed and ETA
@@ -147,6 +149,9 @@ trait HasProgressTracking
      */
     protected function completeProgress(string $message = 'Upload selesai!'): void
     {
+        $this->currentStep = 0;
+        $this->totalSteps = 0;
+
         $this->updateProgress([
             'percentage' => 100,
             'status_title' => 'Selesai!',
@@ -206,5 +211,4 @@ trait HasProgressTracking
 
         return round($bytes, 2).' '.$units[$pow];
     }
-
 }

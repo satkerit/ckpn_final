@@ -16,12 +16,4 @@ return new class extends Migration
             $table->unique(['financing_account_id', 'collateral_code', 'sequence_number'], 'collaterals_account_code_seq_unique');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('collaterals', function (Blueprint $table) {
-            $table->dropUnique('collaterals_account_code_seq_unique');
-            $table->dropColumn('sequence_number');
-        });
-    }
 };

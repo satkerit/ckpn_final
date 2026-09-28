@@ -29,11 +29,4 @@ return new class extends Migration
                 ->comment('true jika ClassifyPeriodDataJob sudah selesai dijalankan');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_periods', function (Blueprint $table) {
-            $table->dropColumn(['pd_method', 'is_classified']);
-        });
-    }
 };

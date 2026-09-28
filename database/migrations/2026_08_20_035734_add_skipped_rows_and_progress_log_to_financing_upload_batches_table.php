@@ -14,11 +14,4 @@ return new class extends Migration
             $table->json('progress_log')->nullable()->after('error_summary');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_upload_batches', function (Blueprint $table) {
-            $table->dropColumn(['skipped_rows', 'processed_rows', 'progress_log']);
-        });
-    }
 };

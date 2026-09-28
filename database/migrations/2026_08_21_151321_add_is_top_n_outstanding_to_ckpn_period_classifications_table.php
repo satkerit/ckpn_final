@@ -22,11 +22,4 @@ return new class extends Migration
                 ->comment('true = masuk top-N outstanding terbesar, ditentukan staging job');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_period_classifications', function (Blueprint $table) {
-            $table->dropColumn('is_top_n_outstanding');
-        });
-    }
 };

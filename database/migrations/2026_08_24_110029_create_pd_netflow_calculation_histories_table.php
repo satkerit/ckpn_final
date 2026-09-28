@@ -34,9 +34,4 @@ return new class extends Migration
             $table->index('calculation_period');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('pd_netflow_calculation_histories');
-    }
 };

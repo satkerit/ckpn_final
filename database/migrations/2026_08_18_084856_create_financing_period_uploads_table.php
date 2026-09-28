@@ -31,9 +31,4 @@ return new class extends Migration
             $table->index(['period', 'writeoff_status']);
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('financing_period_uploads');
-    }
 };

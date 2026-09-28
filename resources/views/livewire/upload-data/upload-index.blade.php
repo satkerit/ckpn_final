@@ -1,6 +1,68 @@
 {{-- resources/views/livewire/upload-data/upload-index.blade.php --}}
 {{-- Ref: PRD Bab 3 - Upload Data Pembiayaan --}}
-<div>
+<div x-data="{
+        progressTimer: null,
+        stopProgress() {
+            if (this.progressTimer !== null) {
+                clearInterval(this.progressTimer);
+                this.progressTimer = null;
+            }
+        },
+        async pollProgress(batchId) {
+            try {
+                const response = await fetch('/api/upload-progress/' + batchId, {
+                    headers: { 'Accept': 'application/json' },
+                });
+
+                if (!response.ok) return;
+
+                const payload = await response.json();
+                const data = payload?.data;
+                if (!data) return;
+
+                const percentage = Math.round(Number(data.percentage) || 0);
+                const text = data.status_text || 'Memproses data...';
+                const info = (data.current_step && data.total_steps)
+                    ? data.current_step.toLocaleString('id-ID') + ' / ' + data.total_steps.toLocaleString('id-ID') + ' baris'
+                    : (data.file_info || '');
+
+                window.updateProgress(percentage, text, info);
+            } catch (error) {
+                // Abaikan error jaringan sesaat; polling berikutnya akan mencoba lagi.
+            }
+        },
+        startProgress(detail) {
+            this.stopProgress();
+            window.showUploadProgress('Memproses ' + (detail.label || 'Data') + '...');
+
+            if (detail.filename) {
+                window.updateProgress(0, 'Memulai upload...', detail.filename);
+            }
+
+            if (!detail.batchId) return;
+
+            this.progressTimer = setInterval(() => this.pollProgress(detail.batchId), 1000);
+
+            // Tahap impor berat dijalankan di background (tanpa await) agar dialog tetap responsif.
+            $wire.executeUpload(detail.batchId);
+        },
+        finishProgress(detail) {
+            this.stopProgress();
+            window.Swal.close();
+
+            if (detail.success) {
+                if (detail.hasErrors) {
+                    window.showWarning(detail.message || 'Upload selesai dengan beberapa catatan.');
+                } else {
+                    window.showSuccess(detail.message || 'Upload selesai.');
+                }
+            } else {
+                window.showError(detail.message || 'Upload gagal diproses.');
+            }
+        },
+    }"
+    x-on:start-upload-progress.window="startProgress($event.detail)"
+    x-on:upload-finished.window="finishProgress($event.detail)">
     <div class="mb-6">
         <h2 class="text-base font-semibold text-zinc-100">Upload Data Pembiayaan</h2>
         <p class="mt-1 text-sm text-zinc-400">Unggah file Excel (.xlsx) atau CSV (.csv) untuk setiap jenis data.</p>

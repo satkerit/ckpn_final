@@ -23,9 +23,4 @@ return new class extends Migration
             $table->index(['type', 'status', 'created_at']);
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('export_jobs');
-    }
 };

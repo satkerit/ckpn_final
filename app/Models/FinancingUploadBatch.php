@@ -22,6 +22,7 @@ class FinancingUploadBatch extends Model
         'period',
         'upload_type',
         'filename',
+        'file_path',
         'uploaded_by_user_id',
         'uploaded_at',
         'total_rows',
@@ -40,6 +41,7 @@ class FinancingUploadBatch extends Model
             'status' => UploadBatchStatus::class,
             'uploaded_at' => 'datetime',
             'error_summary' => 'array',
+            'progress_log' => 'array',
         ];
     }
 

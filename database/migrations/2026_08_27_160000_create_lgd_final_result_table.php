@@ -43,9 +43,4 @@ return new class extends Migration
             $table->unique(['calculation_run_log_id', 'usage_type'], 'lgd_final_run_log_utype_unique');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('lgd_final_result');
-    }
 };

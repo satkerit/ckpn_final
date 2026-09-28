@@ -14,11 +14,4 @@ return new class extends Migration
             $table->index(['upload_type', 'uploaded_at'], 'idx_upload_type_uploaded_at');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('financing_upload_batches', function (Blueprint $table) {
-            $table->dropIndex('idx_upload_type_uploaded_at');
-        });
-    }
 };

@@ -47,15 +47,4 @@ return new class extends Migration
             }
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('data_quality_anomalies', function ($table) {
-            $table->dropIndex('dqa_period_status_idx');
-            $table->dropIndex('dqa_period_severity_idx');
-            $table->dropColumn([
-                'severity', 'status', 'reviewed_by', 'reviewed_at', 'review_notes', 'source_table',
-            ]);
-        });
-    }
 };

@@ -22,11 +22,4 @@ return new class extends Migration
                 ->comment('1=Modal Kerja, 2=Investasi, 3=Konsumsi — dari financing_accounts.usage_type');
         });
     }
-
-    public function down(): void
-    {
-        Schema::table('ckpn_period_classifications', function (Blueprint $table) {
-            $table->dropColumn('usage_type');
-        });
-    }
 };

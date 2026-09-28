@@ -41,25 +41,4 @@ return new class extends Migration
             });
         }
     }
-
-    public function down(): void
-    {
-        if (Schema::hasColumn('pd_migration_matrix', 'usage_type')) {
-            Schema::table('pd_migration_matrix', function (Blueprint $table): void {
-                $table->dropUnique('pd_migration_matrix_unique');
-                $table->dropIndex('pd_migration_matrix_usage_type_index');
-                $table->dropColumn('usage_type');
-            });
-        }
-
-        if (! Schema::hasColumn('pd_migration_matrix', 'risk_segment_id')) {
-            Schema::table('pd_migration_matrix', function (Blueprint $table): void {
-                $table->foreignId('risk_segment_id')->constrained('risk_segments')->restrictOnDelete();
-                $table->unique(
-                    ['calculation_run_log_id', 'risk_segment_id', 'from_quality_grade_id', 'cohort_period'],
-                    'pd_migration_matrix_unique'
-                );
-            });
-        }
-    }
 };
