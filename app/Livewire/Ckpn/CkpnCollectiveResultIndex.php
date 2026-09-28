@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Livewire\Ckpn;
 
+use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
@@ -323,37 +325,21 @@ class CkpnCollectiveResultIndex extends Component
             return;
         }
 
-        $dispatched = 0;
-
-        // pluck('usage_type') mengembalikan instance UsageType karena cast enum di model — bandingkan enum vs enum.
-        $runningUsageTypes = CalculationRunLog::where('period', $periode)
-            ->where('run_type', RunType::CkpnCollective->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->pluck('usage_type')
-            ->all();
-
-        foreach (UsageType::cases() as $usageType) {
-            if (in_array($usageType, $runningUsageTypes, true)) {
-                continue;
-            }
-
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::CkpnCollective,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => auth()->id(),
-            ]);
-
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        $dispatched = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::CkpnCollective,
+            akadKey: AkadEligibilityService::KEY_CKPN,
+            period: $periode,
+            userId: auth()->id(),
             // Pass pdMethod eksplisit agar job tidak perlu query ulang — Ref: PRD Bab 12.3
-            CkpnCollectiveCalculationJob::dispatch(
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
                 $usageType->value,
                 $periode,
                 $this->resolvePdMethod($usageType),
-            );
-            $dispatched++;
-        }
+                $officeCode,
+            ),
+        )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: 'Perhitungan untuk periode '.$periode.' sudah berjalan atau sedang diproses.');
@@ -394,22 +380,21 @@ class CkpnCollectiveResultIndex extends Component
             return;
         }
 
-        foreach (UsageType::cases() as $usageType) {
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::CkpnCollective,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => auth()->id(),
-            ]);
-
-            CkpnCollectiveCalculationJob::dispatch(
+        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor)
+        CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::CkpnCollective,
+            akadKey: AkadEligibilityService::KEY_CKPN,
+            period: $periode,
+            userId: auth()->id(),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
                 $usageType->value,
                 $periode,
                 $this->resolvePdMethod($usageType),
-            );
-        }
+                $officeCode,
+            ),
+            forceRerun: true,
+        );
 
         $this->dispatch('notify', type: 'success', message: 'Rekalkulasi CKPN Kolektif periode '.$periode.' berhasil diantrikan.');
         $this->isRunning = true;
@@ -583,35 +568,20 @@ class CkpnCollectiveResultIndex extends Component
      */
     private function dispatchCollectiveJobs(string $periode, string $pdMethodOverride): void
     {
-        $dispatched = 0;
-
-        $runningUsageTypes = CalculationRunLog::where('period', $periode)
-            ->where('run_type', RunType::CkpnCollective->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->pluck('usage_type')
-            ->all();
-
-        foreach (UsageType::cases() as $usageType) {
-            if (in_array($usageType, $runningUsageTypes, true)) {
-                continue;
-            }
-
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::CkpnCollective,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => auth()->id(),
-            ]);
-
-            CkpnCollectiveCalculationJob::dispatch(
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        $dispatched = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::CkpnCollective,
+            akadKey: AkadEligibilityService::KEY_CKPN,
+            period: $periode,
+            userId: auth()->id(),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
                 $usageType->value,
                 $periode,
                 $pdMethodOverride,
-            );
-            $dispatched++;
-        }
+                $officeCode,
+            ),
+        )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");

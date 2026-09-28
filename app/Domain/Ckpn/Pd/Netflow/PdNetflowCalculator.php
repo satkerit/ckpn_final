@@ -35,6 +35,9 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      * 5. Proyeksikan transition rate ke depan menggunakan rata-rata historis.
      * 6. Hitung compound flow loss diagonal per bucket (PD akhir per bucket).
      *
+     * Segmentasi level 1: bila $officeCode diisi, populasi dibatasi akun kantor tsb
+     * (Ref: PRD Bab 5); NULL = konsolidasi semua kantor.
+     *
      * Ref: PRD Bab 7
      *
      * @return array{
@@ -48,7 +51,7 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      *   history: array<int, array<string, mixed>>,
      * }
      */
-    public function calculate(UsageType $usageType, string $calculationPeriod): array
+    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter pd_rate_akad_codes
         // usageType->value diteruskan agar resolusi akad mempertimbangkan segmentasi yang dikonfigurasi.
@@ -66,12 +69,12 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
         $outstandingPeriods = PeriodHelper::range($outstandingStart, $outstandingEnd);
 
         // Step 1: Validate data quality (Ref: PRD Bab 7.3)
-        // Teruskan $akadCodes agar validator memeriksa populasi yang sama dengan kalkulator.
-        $this->validator->validate($usageType, $outstandingPeriods, $akadCodes);
+        // Teruskan $akadCodes & $officeCode agar validator memeriksa populasi yang sama dengan kalkulator.
+        $this->validator->validate($usageType, $outstandingPeriods, $akadCodes, $officeCode);
 
-        // Step 2: Load outstanding data dari financing_account_periods dengan filter akad yang sama.
+        // Step 2: Load outstanding data dari financing_account_periods dengan filter akad/kantor yang sama.
         // Ref: AGENTS.md §4 — query builder diizinkan untuk agregasi berat
-        $outstandingMap = $this->loadOutstandingMap($usageType->value, $outstandingPeriods, $akadCodes);
+        $outstandingMap = $this->loadOutstandingMap($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
 
         // Step 3: Load all buckets (B1–B13 for transition, B14 is target/default)
         $buckets = Bucket::orderBy('bucket_order')->get();
@@ -168,7 +171,7 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
                 : 0.0;
         }
 
-        $history = $this->loadCalculationHistory($usageType->value, $outstandingPeriods, $akadCodes);
+        $history = $this->loadCalculationHistory($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
 
         return [
             'pd_rates' => $pdRates,
@@ -189,14 +192,15 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      * @param  string[]|null  $akadCodes
      * @return array<int, array<string, mixed>>
      */
-    private function loadCalculationHistory(int $usageTypeValue, array $periods, ?array $akadCodes = null): array
+    private function loadCalculationHistory(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
     {
         return PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
                 ->where('fa.usage_type', $usageTypeValue)
                 ->whereIn('fap.period', $periods),
-            $akadCodes
+            $akadCodes,
+            $officeCode,
         )
             ->select(
                 'fa.account_number',
@@ -239,17 +243,18 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      * @param  string[]|null  $akadCodes  filter kode akad sesuai konfigurasi parameter kalkulasi
      * @return array<string, array<int, float>>
      */
-    private function loadOutstandingMap(int $usageTypeValue, array $periods, ?array $akadCodes = null): array
+    private function loadOutstandingMap(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
     {
         $buckets = Bucket::orderBy('bucket_order')->get();
 
-        // Query historical data dari financing_account_periods dengan filter akad dari parameter kalkulasi.
+        // Query historical data dari financing_account_periods dengan filter akad & kantor dari parameter kalkulasi.
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
                 ->where('fa.usage_type', $usageTypeValue)
                 ->whereIn('fap.period', $periods),
-            $akadCodes
+            $akadCodes,
+            $officeCode,
         )
             ->select('fap.period', 'fap.tgkhari', 'fap.outstanding_balance')
             ->get();

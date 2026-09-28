@@ -27,11 +27,11 @@ final class BucketMovementValidator
      * 1. EmptyBucket   : outstanding salah satu bucket = 0 pada suatu periode (kemungkinan data tidak terupload).
      * 2. DestinationExceedsSource : outstanding bucket pada periode t melebihi outstanding bucket sebelumnya
      *                              periode t-1 (unusual flow yang perlu dikonfirmasi; warning only).
-     *
-     * Kriteria input:
+     *     * Kriteria input:
      * - $usageType : segmen pembiayaan (enum UsageType).
      * - $periods   : list periode urut ascending format yyyymm.
      * - $akadCodes : filter kode akad eligible (null = semua akad, harus konsisten dengan loadOutstandingMap).
+     * - $officeCode: filter kode kantor level 1 (null = konsolidasi; harus konsisten dengan kalkulator).
      *
      * Return value:
      * - true  = tidak ada blocking anomaly.
@@ -41,8 +41,9 @@ final class BucketMovementValidator
      *
      * @param  string[]  $periods  Ordered list of periods to validate (e.g. ['202212','202301',...])
      * @param  string[]|null  $akadCodes  Filter akad eligible — HARUS sama dengan yang dipakai kalkulator
+     * @param  string|null  $officeCode  Filter kantor — HARUS sama dengan yang dipakai kalkulator
      */
-    public function validate(UsageType $usageType, array $periods, ?array $akadCodes = null): bool
+    public function validate(UsageType $usageType, array $periods, ?array $akadCodes = null, ?string $officeCode = null): bool
     {
         $hasBlockingAnomaly = false;
 
@@ -52,7 +53,7 @@ final class BucketMovementValidator
         // Bangun outstanding map per periode dari financing_account_periods (via PdNetflowBaseline)
         // agar konsisten dengan loadOutstandingMap() di PdNetflowCalculator.
         // Ref: AGENTS.md §4 — query builder untuk agregasi berat
-        $outstandingMap = $this->buildOutstandingMapFromSource($usageType, $periods, $akadCodes, $buckets);
+        $outstandingMap = $this->buildOutstandingMapFromSource($usageType, $periods, $akadCodes, $buckets, $officeCode);
 
         foreach ($periods as $i => $period) {
             if ($i === 0) {
@@ -114,6 +115,7 @@ final class BucketMovementValidator
         array $periods,
         ?array $akadCodes,
         Collection $buckets,
+        ?string $officeCode = null,
     ): array {
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
@@ -121,6 +123,7 @@ final class BucketMovementValidator
                 ->where('fa.usage_type', $usageType->value)
                 ->whereIn('fap.period', $periods),
             $akadCodes,
+            $officeCode,
         )
             ->select('fap.period', 'fap.tgkhari', 'fap.outstanding_balance')
             ->get();

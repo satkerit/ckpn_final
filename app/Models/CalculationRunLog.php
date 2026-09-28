@@ -23,6 +23,7 @@ class CalculationRunLog extends Model
         'period',
         'run_type',
         'usage_type',
+        'office_code',
         'status',
         'triggered_by_user_id',
         'approved_by_user_id',

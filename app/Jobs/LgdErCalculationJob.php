@@ -70,6 +70,8 @@ class LgdErCalculationJob implements ShouldQueue
         private readonly int $runLogId,
         private readonly int $usageType,
         private readonly string $calculationPeriod,
+        /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -122,7 +124,7 @@ class LgdErCalculationJob implements ShouldQueue
             $calculator = new LgdExpectedRecoveriesCalculator($windowYears, $useAllAccount);
             $writer = new SnapshotWriter;
 
-            $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod);
+            $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod, $this->officeCode);
             $dataStart = PeriodHelper::shiftBack($this->calculationPeriod, $windowYears * 12);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
@@ -158,6 +160,7 @@ class LgdErCalculationJob implements ShouldQueue
                 totalRecovery: $details['total_recovery'],
                 isAllAccount: $details['is_all_account'],
                 notes: $notes,
+                officeCode: $this->officeCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

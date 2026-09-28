@@ -64,6 +64,8 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
         private readonly string $calculationPeriod,
         /** 'netflow' | 'migration' — PD method yang dipakai untuk usage type ini */
         private readonly string $pdMethod = 'netflow',
+        /** NULL = semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -103,7 +105,7 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
             $calculator = new CkpnCollectiveCalculator((string) $pdMethod);
             $writer = new SnapshotWriter;
 
-            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod);
+            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $this->usageType);
@@ -121,7 +123,7 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
                 $totalEad,
             );
 
-            $writer->writeCkpnCollectiveResults($runLog, $this->calculationPeriod, $results, $notes);
+            $writer->writeCkpnCollectiveResults($runLog, $this->calculationPeriod, $results, $notes, $this->officeCode);
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
         } catch (Throwable $e) {

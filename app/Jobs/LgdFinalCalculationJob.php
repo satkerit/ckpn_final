@@ -59,6 +59,8 @@ class LgdFinalCalculationJob implements ShouldQueue
         private readonly int $runLogId,
         private readonly int $usageType,
         private readonly string $calculationPeriod,
+        /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -93,13 +95,14 @@ class LgdFinalCalculationJob implements ShouldQueue
             $calculator = new LgdFinalCalculator;
             $writer = new SnapshotWriter;
 
-            $result = $calculator->calculateForSegment($usageType, $this->calculationPeriod);
+            $result = $calculator->calculateForSegment($usageType, $this->calculationPeriod, $this->officeCode);
 
             $writer->writeLgdFinalResult(
                 runLog: $runLog,
                 usageType: $usageType,
                 calculationPeriod: $this->calculationPeriod,
                 result: $result,
+                officeCode: $this->officeCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

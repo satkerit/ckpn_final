@@ -68,11 +68,14 @@ final class SnapshotWriter
         int $windowMonths,
         array $pdRates,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         foreach ($pdRates as $bucketId => $pdRate) {
             PdNetflowResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
+                // office_code NULL = konsolidasi lintas kantor; 'xxx' = hasil per kantor (level 1)
+                'office_code' => $officeCode,
                 'from_bucket_id' => $bucketId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,
@@ -120,6 +123,7 @@ final class SnapshotWriter
         array $projPeriods,
         string $rateStart,
         string $compoundEnd,
+        ?string $officeCode = null,
     ): void {
         $projPeriodSet = array_flip($projPeriods);
 
@@ -131,6 +135,7 @@ final class SnapshotWriter
                 PdNetflowBucketMovement::create([
                     'calculation_run_log_id' => $runLog->id,
                     'usage_type' => $usageType->value,
+                    'office_code' => $officeCode,
                     'from_bucket_id' => $bucketId,
                     'period' => $period,
                     'transition_rate' => min(1.0, max(0.0, (float) $rate)),
@@ -147,6 +152,7 @@ final class SnapshotWriter
                 PdNetflowCompoundRate::create([
                     'calculation_run_log_id' => $runLog->id,
                     'usage_type' => $usageType->value,
+                    'office_code' => $officeCode,
                     'from_bucket_id' => $bucketId,
                     'start_period' => $startPeriod,
                     'compound_rate' => $rate,
@@ -173,11 +179,13 @@ final class SnapshotWriter
         UsageType $usageType,
         string $calculationPeriod,
         array $history,
+        ?string $officeCode = null,
     ): void {
         PdNetflowCalculationHistory::create([
             'calculation_run_log_id' => $runLog->id,
             'calculation_period' => $calculationPeriod,
             'usage_type' => $usageType->value,
+            'office_code' => $officeCode,
             'history_data' => $history,
         ]);
     }
@@ -213,10 +221,12 @@ final class SnapshotWriter
         float $totalRecovery,
         bool $isAllAccount,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         LgdExpectedRecoveriesResult::create([
             'calculation_run_log_id' => $runLog->id,
             'usage_type' => $usageType?->value,
+            'office_code' => $officeCode,
             'calculation_period' => $calculationPeriod,
             'data_period_start' => $dataStart,
             'data_period_end' => $dataEnd,
@@ -257,12 +267,14 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $accountResults,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         foreach ($accountResults as $result) {
             LgdCollateralShortfallResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'financing_account_id' => $result['financing_account_id'],
                 'usage_type' => $usageType?->value,
+                'office_code' => $officeCode,
                 'calculation_period' => $calculationPeriod,
                 'outstanding_balance' => $result['outstanding_balance'],
                 'collateral_net_value' => $result['collateral_net_value'],
@@ -298,10 +310,12 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $aggregate,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         LgdCollateralShortfallBySegmentResult::create([
             'calculation_run_log_id' => $runLog->id,
             'usage_type' => $usageType->value,
+            'office_code' => $officeCode,
             'calculation_period' => $calculationPeriod,
             'account_count' => $aggregate['account_count'],
             'total_outstanding' => $aggregate['total_outstanding'],
@@ -341,6 +355,7 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $results,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         foreach ($results as $result) {
             // Hapus snapshot lama yang belum Completed agar tidak trigger immutability guard
@@ -361,6 +376,7 @@ final class SnapshotWriter
                 'calculation_run_log_id' => $runLog->id,
                 'financing_account_id' => $result['financing_account_id'],
                 'calculation_period' => $calculationPeriod,
+                'office_code' => $officeCode ?? $result['office_code'] ?? null,
                 'outstanding_balance' => $result['outstanding_balance'],
                 'total_collateral_liquidation_value' => $result['total_collateral_liquidation_value'],
                 'selling_cost_rate' => $result['selling_cost_rate'],
@@ -397,12 +413,14 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $results,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         foreach ($results as $result) {
             CkpnCollectiveResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'financing_account_id' => $result['financing_account_id'],
                 'usage_type' => $result['usage_type'],
+                'office_code' => $officeCode ?? $result['office_code'] ?? null,
                 'calculation_period' => $calculationPeriod,
                 'pd_method_used' => $result['pd_method_used'],
                 'pd_rate' => $result['pd_rate'],
@@ -456,10 +474,12 @@ final class SnapshotWriter
         UsageType $usageType,
         string $calculationPeriod,
         array $result,
+        ?string $officeCode = null,
     ): void {
         LgdFinalResult::create([
             'calculation_run_log_id' => $runLog->id,
             'usage_type' => $usageType->value,
+            'office_code' => $officeCode,
             'calculation_period' => $calculationPeriod,
             'er_total_writeoff_amount' => $result['er_total_writeoff_amount'],
             'er_total_recovery_amount' => $result['er_total_recovery_amount'],
@@ -504,11 +524,13 @@ final class SnapshotWriter
         int $cohortCount,
         array $pdRates,
         ?string $notes = null,
+        ?string $officeCode = null,
     ): void {
         foreach ($pdRates as $qualityGradeId => $pdRate) {
             PdMigrationResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
+                'office_code' => $officeCode,
                 'from_quality_grade_id' => $qualityGradeId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,
@@ -534,11 +556,13 @@ final class SnapshotWriter
         UsageType $usageType,
         string $calculationPeriod,
         array $rows,
+        ?string $officeCode = null,
     ): void {
         foreach ($rows as $row) {
             PdMigrationMatrix::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
+                'office_code' => $officeCode,
                 'from_quality_grade_id' => $row['from_quality_grade_id'],
                 'to_quality_grade_id' => $row['to_quality_grade_id'],
                 'cohort_period' => $row['cohort_period'],
@@ -576,6 +600,7 @@ final class SnapshotWriter
         array $compoundRates,
         array $sourceOs,
         array $destOs,
+        ?string $officeCode = null,
     ): void {
         // Tentukan model tabel per-segmen berdasarkan UsageType
         $segmentModel = match ($usageType) {
@@ -587,6 +612,7 @@ final class SnapshotWriter
         foreach ($pdRates as $bucketId => $pdRate) {
             $row = [
                 'calculation_run_log_id' => $runLog->id,
+                'office_code' => $officeCode,
                 'from_bucket_id' => $bucketId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,

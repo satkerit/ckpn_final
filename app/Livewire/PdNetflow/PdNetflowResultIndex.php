@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Livewire\PdNetflow;
 
+use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\PdMethod;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
@@ -203,42 +205,20 @@ class PdNetflowResultIndex extends Component
         }
 
         $userId = auth()->id();
-        $dispatched = 0;
 
-        DB::transaction(function () use ($periode, $userId, &$dispatched): void {
-            $runLogs = CalculationRunLog::query()
-                ->where('period', $periode)
-                ->where('run_type', RunType::PdNetflow->value)
-                ->lockForUpdate()
-                ->get()
-                ->groupBy(fn (CalculationRunLog $log): int => $log->usage_type->value);
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        $result = DB::transaction(fn (): array => CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::PdNetflow,
+            akadKey: AkadEligibilityService::KEY_PD_RATE,
+            period: $periode,
+            userId: $userId,
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+        ));
 
-            foreach (UsageType::cases() as $usageType) {
-                $existing = $runLogs->get($usageType->value, collect());
-                $hasCompleted = $existing->contains(fn (CalculationRunLog $log): bool => in_array($log->status->value, [RunStatus::Completed->value, RunStatus::Approved->value], true));
-                $isRunning = $existing->contains(fn (CalculationRunLog $log): bool => in_array($log->status->value, [RunStatus::Pending->value, RunStatus::Processing->value], true));
-
-                if ($hasCompleted || $isRunning) {
-                    continue;
-                }
-
-                $runLog = CalculationRunLog::create([
-                    'period' => $periode,
-                    'run_type' => RunType::PdNetflow,
-                    'usage_type' => $usageType,
-                    'status' => RunStatus::Pending,
-                    'triggered_by_user_id' => $userId,
-                ]);
-
-                PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode);
-                $dispatched++;
-            }
-        });
-
-        if ($dispatched === 0) {
+        if ($result['dispatched'] === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");
         } else {
-            $this->dispatch('notify', type: 'success', message: "Dispatched {$dispatched} job perhitungan PD Netflow untuk periode {$periode}.");
+            $this->dispatch('notify', type: 'success', message: "Dispatched {$result['dispatched']} job perhitungan PD Netflow untuk periode {$periode} (konsolidasi + pecahan per kantor).");
         }
 
         $this->isRunning = true;
@@ -286,25 +266,20 @@ class PdNetflowResultIndex extends Component
         }
 
         $userId = auth()->id();
-        $dispatched = 0;
 
-        foreach (UsageType::cases() as $usageType) {
-            // Buat runLog baru untuk re-run (bukan update yg lama, agar history terjaga)
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::PdNetflow,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => $userId,
-            ]);
-
-            PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode);
-            $dispatched++;
-        }
+        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor)
+        $result = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::PdNetflow,
+            akadKey: AkadEligibilityService::KEY_PD_RATE,
+            period: $periode,
+            userId: $userId,
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            forceRerun: true,
+        );
 
         $this->runPeriode = $periode;
         $this->isRunning = true;
-        $this->dispatch('notify', type: 'success', message: "Re-kalkulasi dispatched {$dispatched} job untuk periode {$periode}.");
+        $this->dispatch('notify', type: 'success', message: "Re-kalkulasi dispatched {$result['dispatched']} job untuk periode {$periode} (konsolidasi + pecahan per kantor).");
     }
 
     /** Hapus seluruh snapshot PD Netflow berdasarkan periode terpilih. */

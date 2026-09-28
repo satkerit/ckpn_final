@@ -54,6 +54,7 @@ final class CkpnIndividualCalculator
      * Input:
      * - $usageType          : segmen pembiayaan (enum UsageType).
      * - $calculationPeriod  : periode perhitungan format yyyymm.
+     * - $officeCode         : kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5.
      *
      * Ref: PRD Bab 6.1
      *
@@ -68,9 +69,10 @@ final class CkpnIndividualCalculator
      *   ckpn_amount: float,
      *   collectibility: int,
      *   pokpby_code: int,
+     *   office_code: string|null,
      * }>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter ckpn_eligible_akad_codes
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $usageType->value);
@@ -78,8 +80,10 @@ final class CkpnIndividualCalculator
         // Ambil akun yang sudah diklasifikasi Individual dari staging — Ref: PRD Bab 6.1
         $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
             ->where('classification', ClassificationType::Individual->value)
-            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes) {
+            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode) {
                 $q->where('usage_type', $usageType->value)
+                    // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
+                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
                     ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
             })
             // Akad 03 hanya jika sudah jatuh tempo pada periode perhitungan.
@@ -138,6 +142,8 @@ final class CkpnIndividualCalculator
                 'ckpn_amount' => $ckpnAmount,
                 'collectibility' => (int) $staging->collectibility,
                 'pokpby_code' => $pokpbyCode,
+                // Stamp kantor asal akun (dipakai SnapshotWriter untuk kolom office_code)
+                'office_code' => $account->office_code !== null ? (string) $account->office_code : null,
             ];
         }
 

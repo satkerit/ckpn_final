@@ -84,6 +84,7 @@ final class LgdFinalCalculator
      *   - Snapshot LGD CS by-segment untuk segmen ini sudah ada di lgd_collateral_shortfall_by_segment_results
      *
      * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5
      * @return array{
      *   usage_type: UsageType,
      *   er_total_writeoff_amount: float,
@@ -97,12 +98,10 @@ final class LgdFinalCalculator
      *
      * @throws RuntimeException jika snapshot ER atau CS untuk segmen ini belum ada.
      */
-    public function calculateForSegment(UsageType $usageType, string $calculationPeriod): array
+    public function calculateForSegment(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
-        // Ambil snapshot LGD ER per segmen
-        $er = LgdExpectedRecoveriesResult::where('usage_type', $usageType->value)
-            ->where('calculation_period', $calculationPeriod)
-            ->first(['total_writeoff_amount', 'total_recovery_amount']);
+        // Ambil snapshot LGD ER per segmen; jika pecahan kantor belum ada, fallback ke konsolidasi
+        $er = $this->resolveEr($usageType, $calculationPeriod, $officeCode);
 
         if ($er === null) {
             throw new RuntimeException(
@@ -111,10 +110,8 @@ final class LgdFinalCalculator
             );
         }
 
-        // Ambil snapshot LGD CS by-segment (kolom: total_outstanding, total_shortfall)
-        $cs = LgdCollateralShortfallBySegmentResult::where('usage_type', $usageType->value)
-            ->where('calculation_period', $calculationPeriod)
-            ->first(['total_outstanding', 'total_shortfall']);
+        // Ambil snapshot LGD CS by-segment (kolom: total_outstanding, total_shortfall); fallback konsolidasi
+        $cs = $this->resolveCs($usageType, $calculationPeriod, $officeCode);
 
         if ($cs === null) {
             throw new RuntimeException(
@@ -145,5 +142,45 @@ final class LgdFinalCalculator
             'total_wo' => $totalWo,
             'lgd_final_rate' => $lgdFinalRate,
         ];
+    }
+
+    /**
+     * Ambil snapshot LGD ER untuk kombinasi (usage_type, periode, kantor).
+     * Kantor spesifik yang belum punya snapshot → fallback ke konsolidasi (office_code NULL).
+     */
+    private function resolveEr(UsageType $usageType, string $calculationPeriod, ?string $officeCode): ?LgdExpectedRecoveriesResult
+    {
+        // Pecahan kantor (melepas global scope konsolidasi)
+        $row = LgdExpectedRecoveriesResult::officeCode($officeCode)
+            ->where('usage_type', $usageType->value)
+            ->where('calculation_period', $calculationPeriod)
+            ->first(['total_writeoff_amount', 'total_recovery_amount']);
+
+        // Fallback konsolidasi (office_code NULL) bila pecahan kantor belum ada
+        return $row ?? ($officeCode !== null
+            ? LgdExpectedRecoveriesResult::where('usage_type', $usageType->value)
+                ->where('calculation_period', $calculationPeriod)
+                ->first(['total_writeoff_amount', 'total_recovery_amount'])
+            : null);
+    }
+
+    /**
+     * Ambil snapshot LGD CS by-segment untuk kombinasi (usage_type, periode, kantor).
+     * Kantor spesifik yang belum punya snapshot → fallback ke konsolidasi (office_code NULL).
+     */
+    private function resolveCs(UsageType $usageType, string $calculationPeriod, ?string $officeCode): ?LgdCollateralShortfallBySegmentResult
+    {
+        // Pecahan kantor (melepas global scope konsolidasi)
+        $row = LgdCollateralShortfallBySegmentResult::officeCode($officeCode)
+            ->where('usage_type', $usageType->value)
+            ->where('calculation_period', $calculationPeriod)
+            ->first(['total_outstanding', 'total_shortfall']);
+
+        // Fallback konsolidasi (office_code NULL) bila pecahan kantor belum ada
+        return $row ?? ($officeCode !== null
+            ? LgdCollateralShortfallBySegmentResult::where('usage_type', $usageType->value)
+                ->where('calculation_period', $calculationPeriod)
+                ->first(['total_outstanding', 'total_shortfall'])
+            : null);
     }
 }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Livewire\PdMigration;
 
+use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\PdMethod;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
@@ -186,31 +188,15 @@ class PdMigrationResultIndex extends Component
         }
 
         $userId = auth()->id();
-        $dispatched = 0;
 
-        // 1 query untuk semua UsageType yang sedang pending/processing (hindari N+1)
-        $runningUsageTypes = CalculationRunLog::where('period', $periode)
-            ->where('run_type', RunType::PdMigration->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->pluck('usage_type')
-            ->all();
-
-        foreach (UsageType::cases() as $usageType) {
-            if (in_array($usageType->value, $runningUsageTypes, true)) {
-                continue;
-            }
-
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::PdMigration,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => $userId,
-            ]);
-
-            PdMigrationCalculationJob::dispatch($runLog->id, $usageType->value, $periode);
-            $dispatched++;
-        }
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        $dispatched = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::PdMigration,
+            akadKey: AkadEligibilityService::KEY_PD_RATE,
+            period: $periode,
+            userId: $userId,
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdMigrationCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+        )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");

@@ -31,11 +31,12 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
      * Gunakan calculatePerAccount() + aggregate() langsung bila membutuhkan detail per akun untuk snapshot.
      *
      * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5
      * @return float LGD rate agregat (0.0–1.0)
      */
-    public function calculate(UsageType $usageType, string $calculationPeriod): float
+    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): float
     {
-        return $this->aggregate($this->calculatePerAccount($usageType, $calculationPeriod))['avg_lgd_rate'];
+        return $this->aggregate($this->calculatePerAccount($usageType, $calculationPeriod, $officeCode))['avg_lgd_rate'];
     }
 
     /**
@@ -89,9 +90,10 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
      * Akun dengan outstanding_balance = 0 atau collateral_net_value = 0 dilewati (skip).
      *
      * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5
      * @return array<int, array{financing_account_id: int, financing_code: string|null, outstanding_balance: float, collateral_net_value: float, shortfall: float, lgd_rate: float}>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter lgd_rate_akad_codes
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_LGD_RATE, $usageType->value);
@@ -104,8 +106,10 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
                     ->where('collectibility', 5)
                     ->orWhere('writeoff_status', 'W')
             )
-            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes) {
+            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode) {
                 $q->where('usage_type', $usageType->value)
+                    // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
+                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
                     ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
             })
             // Akad 03 hanya jika sudah jatuh tempo pada periode perhitungan

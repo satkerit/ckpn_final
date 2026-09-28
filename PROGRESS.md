@@ -1,3 +1,20 @@
+## [2026-09-28] Segmentasi Level 1: Pecah Snapshot Hasil Perhitungan per Kode Kantor
+
+- Status: Done
+- Modul: Seluruh engine kalkulasi (PD Netflow, PD Migration, LGD ER/CS/Final, CKPN Individual/Kolektif)
+- Ref PRD: Bab 5 (segmentasi bertingkat: kantor → jenis penggunaan → akad), 15
+- Perubahan:
+  - Kolom `office_code` (NULL = konsolidasi, 'xx' = kode kantor) ditambahkan ke seluruh tabel snapshot + `calculation_run_log` via 2 migration idempoten. Unique index lama tidak diubah karena tiap target memakai run log sendiri (menghindari error MySQL 1553).
+  - `OfficeSegmentResolver` (baru): daftar kantor berdata per periode + gate `calculation_segmentation_levels` (level office_code aktif) + `runTargets()`.
+  - `CalculationDispatchService` (baru): membuat run log + dispatch per (jenis penggunaan × target kantor) dengan pengecekan idempotensi per target; dipakai 7 halaman hasil (Netflow, Migration, LGD ER/CS/Final, CKPN Individual/Kolektif).
+  - `SnapshotWriter`: semua method `write*` menerima `officeCode` dan menuliskannya ke baris snapshot.
+  - Engine: kalkulator PD Netflow/Migration, LGD ER/CS, CKPN Individual/Kolektif menerima filter `officeCode`; LGD Final & CKPN Kolektif membaca pecahan kantor dengan **fallback ke konsolidasi** bila pecahan kantor belum ada.
+  - `HasOfficeSegmentScope` (trait global scope): query Eloquent snapshot default hanya membaca baris konsolidasi → tampilan/laporan lama tidak dobel baris; scope `officeCode('01')` untuk membaca pecahan kantor.
+  - `office_code` ditambahkan ke `$fillable` 16 model snapshot (mencegah mass-assignment diam-diam mengabaikan kolom).
+- Verifikasi: migration + full test suite 83 passed (248 assertions); smoke test periode 202309 — PD Netflow konsolidasi & kantor 01 completed dengan `office_code` terisi di result/movement/compound/segmented; LGD CS (624 akun konsolidasi, 83 akun kantor 02) & LGD Final per kantor completed.
+- File utama: `database/migrations/2026_09_28_230000_*`, `2026_09_28_231000_*`, `app/Domain/Ckpn/Services/{OfficeSegmentResolver,CalculationDispatchService}.php`, `app/Models/Concerns/HasOfficeSegmentScope.php`, `app/Domain/Ckpn/Services/SnapshotWriter.php`, 7 job + kalkulator engine, 7 Livewire halaman hasil.
+- Next / open item: (1) tabel `financing_outstanding_quarterly` belum punya dimensi kantor sehingga PD Migration per kantor dihitung langsung dari `financing_account_periods` (catat bila pipeline quarterly ditambah office_code); (2) filter/dropdown pemilih kantor di halaman hasil belum ditambahkan (data per kantor sudah tersimpan & bisa difilter via scope `officeCode`); (3) `PdNetflowDetailService`/pivot detail masih menampilkan konsolidasi.
+
 ## [2026-09-28] Fix PD Netflow Failed: Skema Tabel Detail & Resolusi Parameter Segmen
 
 - Status: Done

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\UsageType;
+use App\Models\Concerns\HasOfficeSegmentScope;
 use App\Models\Concerns\SnapshotImmutability;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,6 +16,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class LgdCollateralShortfallBySegmentResult extends Model
 {
+    use HasOfficeSegmentScope;
     use SnapshotImmutability;
 
     protected $table = 'lgd_collateral_shortfall_by_segment_result';
@@ -24,6 +26,7 @@ class LgdCollateralShortfallBySegmentResult extends Model
     protected $fillable = [
         'calculation_run_log_id',
         'usage_type',
+        'office_code',
         'calculation_period',
         'account_count',
         'total_outstanding',

@@ -25,6 +25,7 @@ class LgdCollateralShortfallResult extends Model
         'calculation_run_log_id',
         'financing_account_id',
         'usage_type',
+        'office_code',
         'calculation_period',
         'outstanding_balance',
         'collateral_net_value',

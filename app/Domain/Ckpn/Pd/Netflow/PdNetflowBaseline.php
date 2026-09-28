@@ -32,18 +32,23 @@ final class PdNetflowBaseline
      * 2. Akad '03' (POKPBY) hanya diikutkan jika maturity_date sudah terisi DAN
      *    maturity_date <= LAST_DAY(periode) — akad musyarakah yang belum jatuh tempo dikeluarkan.
      * 3. Jika $eligibleAkadCodes diberikan (tidak NULL), hanya akad dalam daftar tersebut yang masuk.
+     * 4. Jika $officeCode diberikan (segmentasi level 1), hanya akun kantor tersebut yang masuk;
+     *    NULL = semua kantor (konsolidasi).
      *
      * Prasyarat: query HARUS sudah melakukan join/from dengan alias:
      * - `fap` → tabel `financing_account_periods`
      * - `fa`  → tabel `financing_accounts`
      *
      * @param  string[]|null  $eligibleAkadCodes  daftar akad dari parameter (NULL = semua akad)
-     *                                            Ref: PRD Bab 7
+     * @param  string|null  $officeCode  kode kantor (level 1 segmentasi; NULL = konsolidasi)
+     *                                   Ref: PRD Bab 7
      */
-    public static function apply(Builder $query, ?array $eligibleAkadCodes = null): Builder
+    public static function apply(Builder $query, ?array $eligibleAkadCodes = null, ?string $officeCode = null): Builder
     {
         return $query
             ->when($eligibleAkadCodes !== null, fn ($q) => $q->whereIn('fa.akad_code', $eligibleAkadCodes))
+            // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
+            ->when($officeCode !== null, fn ($q) => $q->where('fa.office_code', $officeCode))
             ->where(function ($q): void {
                 $q->whereNull('fa.product_code')
                     ->orWhere('fa.product_code', '!=', '72');

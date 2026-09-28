@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\UsageType;
+use App\Models\Concerns\HasOfficeSegmentScope;
 use App\Models\Concerns\SnapshotImmutability;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PdMigrationMatrix extends Model
 {
+    use HasOfficeSegmentScope;
     use SnapshotImmutability;
 
     protected $table = 'pd_migration_matrix';
@@ -24,6 +26,7 @@ class PdMigrationMatrix extends Model
     protected $fillable = [
         'calculation_run_log_id',
         'usage_type',
+        'office_code',
         'from_quality_grade_id',
         'to_quality_grade_id',
         'cohort_period',

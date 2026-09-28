@@ -67,6 +67,8 @@ class CkpnIndividualCalculationJob implements ShouldQueue
         private readonly int $runLogId,
         private readonly int $usageType,
         private readonly string $calculationPeriod,
+        /** NULL = semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -104,7 +106,7 @@ class CkpnIndividualCalculationJob implements ShouldQueue
             $calculator = new CkpnIndividualCalculator(sellingCostRate: $sellingCostRate);
             $writer = new SnapshotWriter;
 
-            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod);
+            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $this->usageType);
@@ -122,7 +124,7 @@ class CkpnIndividualCalculationJob implements ShouldQueue
                 $totalOutstanding,
             );
 
-            $writer->writeCkpnIndividualResults($runLog, $this->calculationPeriod, $results, $notes);
+            $writer->writeCkpnIndividualResults($runLog, $this->calculationPeriod, $results, $notes, $this->officeCode);
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
         } catch (Throwable $e) {

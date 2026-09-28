@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Enums\UsageType;
+use App\Models\Concerns\HasOfficeSegmentScope;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PdNetflowBucketMovement extends Model
 {
+    use HasOfficeSegmentScope;
+
     protected $table = 'pd_netflow_bucket_movement';
 
     public $timestamps = false;
@@ -21,6 +24,7 @@ class PdNetflowBucketMovement extends Model
     protected $fillable = [
         'calculation_run_log_id',
         'usage_type',
+        'office_code',
         'from_bucket_id',
         'period',
         'transition_rate',

@@ -55,6 +55,8 @@ class PdNetflowCalculationJob implements ShouldQueue
         private readonly int $runLogId,
         private readonly int $usageType,
         private readonly string $calculationPeriod,
+        /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -111,7 +113,7 @@ class PdNetflowCalculationJob implements ShouldQueue
             $calculator = new PdNetflowCalculator($resolver, $validator);
             $writer = new SnapshotWriter;
 
-            $result = $calculator->calculate($usageType, $this->calculationPeriod);
+            $result = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $this->usageType);
@@ -142,6 +144,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 windowMonths: $windowMonths,
                 pdRates: $result['pd_rates'],
                 notes: $notes,
+                officeCode: $this->officeCode,
             );
 
             $writer->writePdNetflowDetail(
@@ -154,6 +157,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 projPeriods: $result['proj_periods'],
                 rateStart: $result['rate_start'],
                 compoundEnd: $result['compound_end'],
+                officeCode: $this->officeCode,
             );
 
             $writer->writePdNetflowHistory(
@@ -161,6 +165,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 usageType: $usageType,
                 calculationPeriod: $this->calculationPeriod,
                 history: $result['history'],
+                officeCode: $this->officeCode,
             );
 
             // Simpan ke 4 tabel tersegmentasi (Konsolidasi + segmen spesifik) — Ref: PRD Bab 7
@@ -195,6 +200,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 compoundRates: $flatCompound,
                 sourceOs: $sourceOs,
                 destOs: $destOs,
+                officeCode: $this->officeCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

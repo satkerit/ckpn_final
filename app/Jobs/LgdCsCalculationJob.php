@@ -63,6 +63,8 @@ class LgdCsCalculationJob implements ShouldQueue
         private readonly int $runLogId,
         private readonly int $usageType,
         private readonly string $calculationPeriod,
+        /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
+        private readonly ?string $officeCode = null,
     ) {}
 
     /**
@@ -99,7 +101,7 @@ class LgdCsCalculationJob implements ShouldQueue
             $calculator = new LgdCollateralShortfallCalculator;
             $writer = new SnapshotWriter;
 
-            $accountResults = $calculator->calculatePerAccount($usageType, $this->calculationPeriod);
+            $accountResults = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode);
             $aggregate = $calculator->aggregate($accountResults);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
@@ -122,6 +124,7 @@ class LgdCsCalculationJob implements ShouldQueue
                 calculationPeriod: $this->calculationPeriod,
                 accountResults: $accountResults,
                 notes: $notes,
+                officeCode: $this->officeCode,
             );
 
             $writer->writeLgdCsBySegmentResult(
@@ -130,6 +133,7 @@ class LgdCsCalculationJob implements ShouldQueue
                 calculationPeriod: $this->calculationPeriod,
                 aggregate: $aggregate,
                 notes: $notes,
+                officeCode: $this->officeCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

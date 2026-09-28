@@ -34,6 +34,7 @@ class CkpnIndividualResult extends Model
     public const UPDATED_AT = null;
 
     protected $fillable = [
+        'office_code',
         'calculation_run_log_id',
         'financing_account_id',
         'calculation_period',

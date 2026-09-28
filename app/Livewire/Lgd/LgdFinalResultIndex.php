@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Livewire\Lgd;
 
+use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
@@ -222,20 +224,22 @@ class LgdFinalResultIndex extends Component
         $this->currentBatchMinRunLogId = 0;
 
         $firstId = null;
-        foreach (UsageType::cases() as $usageType) {
-            $runLog = CalculationRunLog::create([
-                'run_type' => RunType::LgdFinal->value,
-                'period' => $this->runPeriode,
-                'usage_type' => $usageType->value,
-                'status' => RunStatus::Pending->value,
-            ]);
 
-            if ($firstId === null) {
-                $firstId = $runLog->id;
-            }
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::LgdFinal,
+            akadKey: AkadEligibilityService::KEY_LGD_RATE,
+            period: $this->runPeriode,
+            userId: auth()->id(),
+            dispatcher: function (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) use (&$firstId): void {
+                if ($firstId === null) {
+                    $firstId = $runLog->id;
+                }
 
-            LgdFinalCalculationJob::dispatch($runLog->id, $usageType->value, $this->runPeriode);
-        }
+                LgdFinalCalculationJob::dispatch($runLog->id, $usageType->value, $this->runPeriode, $officeCode);
+            },
+            forceRerun: true,
+        );
 
         // Simpan ID minimum batch ini agar pollJobStatus tidak tercampur run log lama yang failed
         $this->currentBatchMinRunLogId = $firstId ?? 0;

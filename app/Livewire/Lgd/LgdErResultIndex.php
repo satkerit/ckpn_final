@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Livewire\Lgd;
 
+use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
@@ -154,43 +156,17 @@ class LgdErResultIndex extends Component
         }
 
         $userId = auth()->id();
-        $dispatched = 0;
 
-        // Tolak jika periode sudah Completed/Approved — gunakan Re-Kalkulasi
-        $doneCount = CalculationRunLog::where('period', $periode)
-            ->where('run_type', RunType::LgdEr->value)
-            ->whereIn('status', [RunStatus::Completed->value, RunStatus::Approved->value])
-            ->count();
-
-        if ($doneCount > 0) {
-            $this->dispatch('notify', type: 'warning', message: "Periode {$periode} sudah pernah dihitung. Gunakan tombol Rekalkulasi untuk menghitung ulang.");
-
-            return;
-        }
-
-        // 1 query untuk semua UsageType yang sedang pending/processing (hindari N+1)
-        $runningUsageTypes = CalculationRunLog::where('period', $periode)
-            ->where('run_type', RunType::LgdEr->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->pluck('usage_type')
-            ->all();
-
-        foreach (UsageType::cases() as $usageType) {
-            if (in_array($usageType->value, $runningUsageTypes, true)) {
-                continue;
-            }
-
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::LgdEr,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => $userId,
-            ]);
-
-            LgdErCalculationJob::dispatch($runLog->id, $usageType->value, $periode);
-            $dispatched++;
-        }
+        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1).
+        // Target yang sudah Completed/Approved/Pending/Processing otomatis dilewati;
+        // gunakan Rekalkulasi untuk menghitung ulang seluruh target.
+        $dispatched = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::LgdEr,
+            akadKey: AkadEligibilityService::KEY_LGD_RATE,
+            period: $periode,
+            userId: $userId,
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => LgdErCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+        )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");
@@ -246,21 +222,16 @@ class LgdErResultIndex extends Component
         $this->deletePeriodeData($periode);
 
         $userId = auth()->id();
-        $dispatched = 0;
 
-        foreach (UsageType::cases() as $usageType) {
-            // Buat runLog baru untuk re-run (bukan update yg lama, agar history terjaga)
-            $runLog = CalculationRunLog::create([
-                'period' => $periode,
-                'run_type' => RunType::LgdEr,
-                'usage_type' => $usageType,
-                'status' => RunStatus::Pending,
-                'triggered_by_user_id' => $userId,
-            ]);
-
-            LgdErCalculationJob::dispatch($runLog->id, $usageType->value, $periode);
-            $dispatched++;
-        }
+        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor)
+        $dispatched = CalculationDispatchService::dispatchPerSegment(
+            runType: RunType::LgdEr,
+            akadKey: AkadEligibilityService::KEY_LGD_RATE,
+            period: $periode,
+            userId: $userId,
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => LgdErCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            forceRerun: true,
+        )['dispatched'];
 
         $this->runPeriode = $periode;
         $this->isRunning = true;

@@ -61,6 +61,7 @@ final class CkpnCollectiveCalculator
      * TODO(PRD Bab 12.3): konfirmasi skema kombinasi PD akhir (primary method per segmen vs weighted avg)
      *
      * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
      * @return array<int, array{
      *   financing_account_id: int,
      *   usage_type: string,
@@ -73,16 +74,19 @@ final class CkpnCollectiveCalculator
      *   tgkmdl_balance: float|null,
      *   outstanding_balance: float,
      *   ckpn_amount: float,
+     *   office_code: string|null,
      * }>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
         // FIX: Ambil data langsung dari ckpn_period_classifications agar konsisten dengan rekonsiliasi
         // Sumber data harus SAMA dengan yang digunakan saat klasifikasi — Ref: PRD Bab 11
         $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
             ->where('classification', ClassificationType::Collective->value)
-            ->whereHas('financingAccount', function ($q) use ($usageType) {
-                $q->where('usage_type', $usageType->value);
+            ->whereHas('financingAccount', function ($q) use ($usageType, $officeCode) {
+                $q->where('usage_type', $usageType->value)
+                    // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
+                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode));
             })
             ->with('financingAccount')
             ->get();
@@ -91,11 +95,12 @@ final class CkpnCollectiveCalculator
             return [];
         }
 
-        // Resolve PD rates untuk segmen (per bucket/kualitas, diambil dari snapshot terbaru)
-        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod);
+        // Resolve PD rates untuk segmen (per bucket/kualitas, diambil dari snapshot terbaru).
+        // Kantor spesifik → pakai PD pecahan kantor tsb, fallback konsolidasi jika belum ada.
+        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod, $officeCode);
 
         // Resolve LGD Final rate dari snapshot lgd_final_result (gabungan ER + CS) per segmen
-        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod);
+        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod, $officeCode);
         $lgdMethod = 'lgd_final';
 
         $results = [];
@@ -134,6 +139,8 @@ final class CkpnCollectiveCalculator
             $results[] = [
                 'financing_account_id' => $financingAccountId,
                 'usage_type' => $usageType->value,
+                // Stamp kantor asal akun (dipakai SnapshotWriter untuk kolom office_code)
+                'office_code' => $account->office_code !== null ? (string) $account->office_code : null,
                 'pd_method_used' => $this->pdMethod,
                 'pd_rate' => $pdRate,
                 'lgd_method_used' => $lgdMethod,
@@ -166,22 +173,38 @@ final class CkpnCollectiveCalculator
      * @param  string  $calculationPeriod  Format yyyymm
      * @return array<int, float> key = bucket_id (netflow) atau quality_grade_id (migration), value = pd_rate
      */
-    private function resolvePdRates(UsageType $usageType, string $calculationPeriod): array
+    private function resolvePdRates(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
     {
         if ($this->pdMethod === 'netflow') {
-            return PdNetflowResult::where('usage_type', $usageType->value)
+            // Pecahan kantor (melepas global scope konsolidasi)
+            $rows = PdNetflowResult::officeCode($officeCode)
+                ->where('usage_type', $usageType->value)
                 ->where('calculation_period', $calculationPeriod)
-                ->pluck('pd_rate', 'from_bucket_id')
-                ->map(fn ($v) => (float) $v)
-                ->all();
+                ->pluck('pd_rate', 'from_bucket_id');
+
+            // Fallback konsolidasi (office_code NULL) untuk kantor yang belum punya pecahan
+            if ($rows->isEmpty() && $officeCode !== null) {
+                $rows = PdNetflowResult::where('usage_type', $usageType->value)
+                    ->where('calculation_period', $calculationPeriod)
+                    ->pluck('pd_rate', 'from_bucket_id');
+            }
+
+            return $rows->map(fn ($v) => (float) $v)->all();
         }
 
         // migration
-        return PdMigrationResult::where('usage_type', $usageType->value)
+        $rows = PdMigrationResult::officeCode($officeCode)
+            ->where('usage_type', $usageType->value)
             ->where('calculation_period', $calculationPeriod)
-            ->pluck('pd_rate', 'from_quality_grade_id')
-            ->map(fn ($v) => (float) $v)
-            ->all();
+            ->pluck('pd_rate', 'from_quality_grade_id');
+
+        if ($rows->isEmpty() && $officeCode !== null) {
+            $rows = PdMigrationResult::where('usage_type', $usageType->value)
+                ->where('calculation_period', $calculationPeriod)
+                ->pluck('pd_rate', 'from_quality_grade_id');
+        }
+
+        return $rows->map(fn ($v) => (float) $v)->all();
     }
 
     /**
@@ -198,11 +221,20 @@ final class CkpnCollectiveCalculator
      *
      * @throws \RuntimeException jika snapshot tidak ditemukan.
      */
-    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod): float
+    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): float
     {
-        $rate = LgdFinalResult::where('usage_type', $usageType->value)
+        // Pecahan kantor (melepas global scope konsolidasi)
+        $rate = LgdFinalResult::officeCode($officeCode)
+            ->where('usage_type', $usageType->value)
             ->where('calculation_period', $calculationPeriod)
             ->value('lgd_final_rate');
+
+        // Fallback konsolidasi (office_code NULL) untuk kantor yang belum punya pecahan
+        if ($rate === null && $officeCode !== null) {
+            $rate = LgdFinalResult::where('usage_type', $usageType->value)
+                ->where('calculation_period', $calculationPeriod)
+                ->value('lgd_final_rate');
+        }
 
         if ($rate === null) {
             throw new \RuntimeException(

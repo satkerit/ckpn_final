@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Models\Concerns\HasOfficeSegmentScope;
 use App\Models\Concerns\SnapshotImmutability;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class PdNetflowModalKerja extends Model
 {
+    use HasOfficeSegmentScope;
     use SnapshotImmutability;
 
     protected $table = 'pd_netflow_modal_kerja';
@@ -25,6 +27,7 @@ class PdNetflowModalKerja extends Model
     const UPDATED_AT = null;
 
     protected $fillable = [
+        'office_code',
         'calculation_run_log_id',
         'from_bucket_id',
         'calculation_period',
