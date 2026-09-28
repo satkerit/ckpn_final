@@ -146,6 +146,11 @@
     background-clip: content-box;
 }
 
+/* Elemen Alpine yang menunggu inisialisasi (mis. modal) disembunyikan agar tidak flicker */
+[x-cloak] {
+    display: none !important;
+}
+
 /* Progress bar Livewire global — strip bergerak saat wire:loading aktif */
 .lw-progress {
     position: fixed;

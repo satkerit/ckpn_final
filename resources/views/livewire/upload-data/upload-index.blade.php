@@ -107,7 +107,16 @@
                             <span class="flex-1">{{ $messages[$typeKey]['text'] }}</span>
                             <button wire:click="clearMessage('{{ $typeKey }}')" class="shrink-0 text-zinc-400 hover:text-zinc-200">&times;</button>
                         </div>
-                        @if (isset($messages[$typeKey]['details']) && $messages[$typeKey]['details'])
+                        @if (! empty($messages[$typeKey]['errors']))
+                            <ul class="mt-1 space-y-0.5 opacity-90">
+                                @foreach ($messages[$typeKey]['errors'] as $errorLine)
+                                    <li class="flex items-start gap-1.5">
+                                        <span class="shrink-0 mt-[3px] h-1 w-1 rounded-full bg-current"></span>
+                                        <span>{{ $errorLine }}</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @elseif (isset($messages[$typeKey]['details']) && $messages[$typeKey]['details'])
                             <div class="text-xs opacity-90 mt-1">
                                 {{ $messages[$typeKey]['details'] }}
                             </div>

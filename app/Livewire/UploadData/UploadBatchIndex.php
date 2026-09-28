@@ -27,6 +27,10 @@ class UploadBatchIndex extends Component
 
     public string $filterPeriod = '';
 
+    public ?int $selectedBatchId = null;
+
+    public bool $showErrorModal = false;
+
     public function updatingSearch(): void
     {
         $this->resetPage();
@@ -45,6 +49,29 @@ class UploadBatchIndex extends Component
     public function updatingFilterPeriod(): void
     {
         $this->resetPage();
+    }
+
+    /** Buka modal detail error untuk batch tertentu. */
+    public function openErrorModal(int $batchId): void
+    {
+        $this->selectedBatchId = $batchId;
+        $this->showErrorModal = true;
+    }
+
+    public function closeErrorModal(): void
+    {
+        $this->showErrorModal = false;
+        $this->selectedBatchId = null;
+    }
+
+    /** Batch yang sedang dilihat detail errornya. */
+    public function getSelectedBatchProperty(): ?FinancingUploadBatch
+    {
+        if ($this->selectedBatchId === null) {
+            return null;
+        }
+
+        return FinancingUploadBatch::find($this->selectedBatchId);
     }
 
     /** Label untuk setiap upload_type */

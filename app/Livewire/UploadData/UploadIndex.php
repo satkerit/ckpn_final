@@ -250,7 +250,79 @@ class UploadIndex extends Component
 
         $first = $errorSummary[0];
 
-        return is_array($first) ? (string) ($first['error'] ?? '') : (string) $first;
+        if (is_string($first)) {
+            return $first;
+        }
+
+        if (! is_array($first)) {
+            return '';
+        }
+
+        $row = $first['row'] ?? null;
+        $field = $first['field'] ?? null;
+        $error = (string) ($first['error'] ?? '');
+
+        $prefix = '';
+        if (is_numeric($row)) {
+            $prefix = "Baris {$row}: ";
+        } elseif ($field !== null && $field !== '' && $field !== 'general') {
+            $prefix = "Kolom {$field}: ";
+        }
+
+        return $prefix.$error;
+    }
+
+    /**
+     * Format daftar error_summary menjadi array string ringkas (maks 5 entri)
+     * untuk ditampilkan langsung di alert card.
+     *
+     * @return array<int, string>
+     */
+    private function formatErrorList(array $errorSummary): array
+    {
+        if ($errorSummary === []) {
+            return [];
+        }
+
+        $formatted = [];
+        $maxDisplay = 5;
+        $count = 0;
+
+        foreach ($errorSummary as $item) {
+            if ($count >= $maxDisplay) {
+                $remaining = count($errorSummary) - $maxDisplay;
+                $formatted[] = "...dan {$remaining} error lainnya (lihat di halaman Riwayat Upload).";
+
+                break;
+            }
+
+            if (is_string($item)) {
+                $formatted[] = $item;
+                $count++;
+
+                continue;
+            }
+
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $row = $item['row'] ?? null;
+            $field = $item['field'] ?? null;
+            $error = (string) ($item['error'] ?? 'Terjadi kesalahan');
+
+            $prefix = '';
+            if (is_numeric($row)) {
+                $prefix = "Baris {$row}: ";
+            } elseif ($field !== null && $field !== '' && $field !== 'general') {
+                $prefix = "Kolom {$field}: ";
+            }
+
+            $formatted[] = $prefix.$error;
+            $count++;
+        }
+
+        return $formatted;
     }
 
     /** Clear pesan status untuk tipe upload tertentu */

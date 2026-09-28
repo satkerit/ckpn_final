@@ -31,6 +31,19 @@
   - **Modal template**: tambah branch `x-if` untuk handle format string sebagai fallback (backward compat data lama di DB).
 - File utama: `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`
 
+## [2026-09-28] Perbaikan Detail Pesan Error Upload
+
+- Status: Done
+- Modul: Upload Data — Error Reporting
+- Ref PRD: Bab 3, Bab 7.3
+- Perubahan:
+  - `executeUpload()` kini menangkap pesan exception (`$e->getMessage()`) dan menampilkannya sebagai pesan utama, tidak lagi generik.
+  - Error per baris/kolom dari `error_summary` diformat & ditampilkan langsung di kartu upload (maks 5 baris + sisa "dan N error lainnya"), sebelumnya hanya menyuruh buka halaman Riwayat.
+  - `UploadProcessorService::markFailed()` menormalkan semua entri error ke struktur `{row, field, error}`; ditambah `normalizeError()` & `describeError()` (prefix "Baris N:" / "Kolom X:").
+  - Blok `createReader()`/`countTotalRows()` dipindah ke dalam try/catch — file rusak/tidak terbaca sekarang menandai batch `Failed` + pesan jelas, tidak lagi nyangkut `Processing`.
+- File utama: `app/Livewire/UploadData/UploadIndex.php`, `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-index.blade.php`
+- Verifikasi: pint PASS; `php artisan test tests/Feature/UploadProcessorServiceTest.php` → 3 passed; GetDiagnostics bersih.
+
 ## [2026-09-28] Hapus Method down() pada Seluruh Migration
 
 - Status: Done
