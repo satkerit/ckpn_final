@@ -7,7 +7,7 @@ namespace App\Livewire\Ckpn;
 use App\Domain\Ckpn\Preview\CkpnPreviewResult;
 use App\Domain\Ckpn\Preview\CkpnPreviewService;
 use App\Exports\CkpnPreviewExport;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CkpnCollectiveResult;
 use App\Models\CkpnIndividualResult;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -38,9 +38,7 @@ class CkpnPreviewIndex extends Component
 
     public function mount(): void
     {
-        $this->topN = max(1, (int) (CalculationParameter::whereNull('usage_type')
-            ->where('parameter_key', 'ckpn_individual_top_n_outstanding')
-            ->value('parameter_value') ?? 10));
+        $this->topN = max(1, CalculationGeneralSetting::intValue('ckpn_individual_top_n_outstanding', 10));
 
         $this->period = (string) (self::ckpnResultPeriods()->first() ?? '');
     }

@@ -9,7 +9,7 @@ use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\SnapshotWriter;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -98,11 +98,8 @@ class CkpnIndividualCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil parameter dari calculation_parameters — Ref: AGENTS.md §9
-            $sellingCostRate = (float) (CalculationParameter::where('parameter_key', 'ckpn_individual_selling_cost_rate')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? 0.05);
+            // Ambil parameter dari calculation_general_settings — Ref: AGENTS.md §9
+            $sellingCostRate = CalculationGeneralSetting::floatValue('ckpn_individual_selling_cost_rate', 0.05);
 
             $calculator = new CkpnIndividualCalculator(sellingCostRate: $sellingCostRate);
             $writer = new SnapshotWriter;

@@ -4,41 +4,37 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Services;
 
-use Illuminate\Support\Facades\DB;
+use App\Models\CalculationColumnConfig;
 
 /**
- * Resolusi daftar kode akad yang eligible sebagai dasar perhitungan CKPN / rate PD / rate LGD.
+ * Resolusi daftar kode akad (POKPBY) yang eligible sebagai dasar perhitungan CKPN / rate PD / rate LGD.
  *
- * Sumber: tabel calculation_parameters (Ref: PRD Bab 15), format nilai CSV, mis. "01,02,04".
- * - Nilai kosong atau parameter tidak ada  = semua akad eligible (tanpa filter daftar).
+ * Sumber: tabel calculation_column_configs (Ref: PRD Bab 15 + modul Parameter Kalkulasi baru).
+ * - Daftar diambil dari kolom pokpby_code yang aktif pada method terkait.
+ * - Daftar kosong = semua akad eligible (tanpa filter daftar).
  * - Aturan khusus akad '03' (POKPBY): hanya boleh digunakan jika sudah jatuh tempo —
- *   diterapkan oleh masing-masing engine via applyAkad03MaturityRule() karena batas
+ *   diterapkan oleh masing-masing engine via excludeNotYetMaturedAkad03() karena batas
  *   perbandingannya berbeda (LAST_DAY periode untuk PD/CKPN, writeoff_date untuk LGD-ER).
  */
 final class AkadEligibilityService
 {
-    /** Parameter: daftar akad dasar perhitungan CKPN. */
-    public const KEY_CKPN = 'ckpn_eligible_akad_codes';
+    /** Method konfigurasi kolom untuk dasar perhitungan CKPN. */
+    public const KEY_CKPN = 'ckpn';
 
-    /** Parameter: daftar akad dasar perhitungan rate PD (Netflow & Migration). */
-    public const KEY_PD_RATE = 'pd_rate_akad_codes';
+    /** Method konfigurasi kolom untuk dasar perhitungan rate PD (Netflow & Migration). */
+    public const KEY_PD_RATE = 'pd';
 
-    /** Parameter: daftar akad dasar perhitungan rate LGD (ER & CS). */
-    public const KEY_LGD_RATE = 'lgd_rate_akad_codes';
+    /** Method konfigurasi kolom untuk dasar perhitungan rate LGD (ER & CS). */
+    public const KEY_LGD_RATE = 'lgd';
 
     /**
-     * Mengambil daftar kode akad yang eligible untuk perhitungan tertentu dari tabel `calculation_parameters`.
+     * Mengambil daftar kode akad (POKPBY) yang eligible dari `calculation_column_configs`.
      *
-     * Kriteria penggunaan:
-     * - $paramKey   : gunakan konstanta KEY_CKPN, KEY_PD_RATE, atau KEY_LGD_RATE sesuai konteks engine.
-     * - $usageTypeValue : nilai enum UsageType (int) untuk filter per segmen; NULL = ambil parameter global.
+     * $paramKey    : KEY_CKPN, KEY_PD_RATE, atau KEY_LGD_RATE sesuai konteks engine.
+     * $usageTypeValue : tidak dipakai — segmentasi kini ditangani CalculationDataRange.
      *
-     * Logika prioritas parameter:
-     * - Jika ada baris dengan usage_type spesifik → gunakan itu (menang atas global).
-     * - Jika hanya ada baris usage_type NULL → gunakan sebagai fallback global.
-     * - Jika parameter tidak ada atau nilainya kosong → return NULL (artinya SEMUA akad eligible, tanpa filter).
+     * Daftar = seluruh pokpby_code aktif pada method tsb. Tanpa baris aktif = semua akad eligible.
      *
-     * Format nilai di tabel: CSV, mis. "01,02,04" → akan di-parse jadi ['01','02','04'].
      * Akad '03' (POKPBY): walaupun termasuk dalam daftar, aturan maturity date tetap
      * diterapkan secara terpisah oleh masing-masing engine (bukan di sini).
      *
@@ -46,29 +42,15 @@ final class AkadEligibilityService
      */
     public static function eligibleCodes(string $paramKey, ?int $usageTypeValue = null): ?array
     {
-        $raw = DB::table('calculation_parameters')
-            ->where('parameter_key', $paramKey)
-            ->when(
-                $usageTypeValue !== null,
-                fn ($q) => $q->where(
-                    fn ($w) => $w->where('usage_type', $usageTypeValue)->orWhereNull('usage_type')
-                )
-            )
-            ->orderByRaw('usage_type IS NULL ASC') // spesifik dulu, global sebagai fallback
-            ->value('parameter_value');
-
-        if ($raw === null || trim((string) $raw) === '') {
-            return null;
-        }
-
-        $codes = collect(preg_split('/[,\s;]+/', trim((string) $raw)) ?: [])
-            ->map(fn ($c) => trim($c))
+        $codes = CalculationColumnConfig::query()
+            ->where('method', $paramKey)
+            ->where('is_active', true)
+            ->pluck('pokpby_code')
+            ->map(fn ($c) => trim((string) $c))
             ->filter(fn ($c) => $c !== '')
             ->unique()
             ->values()
             ->all();
-
-        // Query builder raw dipakai di sini karena pembacaan parameter tunggal yang ringan.
 
         return $codes === [] ? null : $codes;
     }

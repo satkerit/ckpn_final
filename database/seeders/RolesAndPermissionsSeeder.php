@@ -34,7 +34,6 @@ class RolesAndPermissionsSeeder extends Seeder
     /** Resource master data yang bisa dikelola risk_analyst. */
     private const MASTER_RESOURCES = [
         'Bucket',
-        'CalculationParameter',
         'CollateralType',
         'FinancingOffice',
         'QualityGrade',

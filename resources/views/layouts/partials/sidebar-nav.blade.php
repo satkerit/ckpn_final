@@ -18,7 +18,6 @@
         ]],
         ['section' => 'Master Data', 'items' => [
             ['label' => 'Master Data', 'icon' => 'cog', 'children' => [
-                ['label' => 'Parameter Kalkulasi', 'route' => 'master-data.parameters.index'],
                 ['label' => 'Bucket',              'route' => 'master-data.buckets.index'],
                 ['label' => 'Kualitas Aktiva',     'route' => 'master-data.quality-grades.index'],
                 ['label' => 'Jenis Jaminan',       'route' => 'master-data.collateral-types.index'],

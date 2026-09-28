@@ -31,11 +31,6 @@ class RiskSegment extends Model
     }
 
     /** Ref: PRD Bab 5 */
-    public function calculationParameters(): HasMany
-    {
-        return $this->hasMany(CalculationParameter::class);
-    }
-
     public function accountSegmentMaps(): HasMany
     {
         return $this->hasMany(FinancingAccountSegmentMap::class);

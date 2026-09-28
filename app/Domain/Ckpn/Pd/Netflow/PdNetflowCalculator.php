@@ -28,20 +28,12 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      * Menjalankan seluruh perhitungan PD Netflow untuk satu segmen dan satu periode.
      *
      * Alur kalkulasi:
-     * 1. Validasi data quality bucket movement (flag anomali ke tabel data_quality_anomalies).
-     * 2. Muat data outstanding per bucket per periode dari tabel `financing_outstanding_monthly`.
-     * 3. Hitung transition rate antar bucket per periode (dari data historis aktual).
-     * 4. Proyeksikan transition rate ke depan sebanyak forwardProjectionMonths bulan menggunakan rata-rata historis.
-     * 5. Hitung compound flow loss diagonal per bucket (PD akhir per bucket).
-     *
-     * Prasyarat sebelum memanggil fungsi ini:
-     * - Data outstanding bulanan segmen sudah terupload & tersimpan di `financing_outstanding_monthly`.
-     * - Parameter `pd_netflow_window_months` dan `pd_netflow_forward_projection_months` sudah dikonfigurasi.
-     * - Akad codes eligible sudah dikonfigurasi di `calculation_parameters` (key: pd_rate_akad_codes).
-     *
-     * Input:
-     * - $usageType         : segmen pembiayaan (enum UsageType).
-     * - $calculationPeriod : periode perhitungan format yyyymm.
+     * 1. Resolve $akadCodes dari parameter kalkulasi sesuai segmen ($usageType).
+     * 2. Validasi data quality bucket movement (flag anomali ke tabel data_quality_anomalies).
+     * 3. Muat data outstanding per bucket per periode dari financing_account_periods.
+     * 4. Hitung transition rate antar bucket per periode (dari data historis aktual).
+     * 5. Proyeksikan transition rate ke depan menggunakan rata-rata historis.
+     * 6. Hitung compound flow loss diagonal per bucket (PD akhir per bucket).
      *
      * Ref: PRD Bab 7
      *
@@ -53,11 +45,13 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      *   proj_periods: string[],
      *   rate_start: string,
      *   compound_end: string,
+     *   history: array<int, array<string, mixed>>,
      * }
      */
     public function calculate(UsageType $usageType, string $calculationPeriod): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter pd_rate_akad_codes
+        // usageType->value diteruskan agar resolusi akad mempertimbangkan segmentasi yang dikonfigurasi.
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $usageType->value);
 
         // Resolve all period ranges from window
@@ -72,18 +66,19 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
         $outstandingPeriods = PeriodHelper::range($outstandingStart, $outstandingEnd);
 
         // Step 1: Validate data quality (Ref: PRD Bab 7.3)
-        $this->validator->validate($usageType, $outstandingPeriods);
+        // Teruskan $akadCodes agar validator memeriksa populasi yang sama dengan kalkulator.
+        $this->validator->validate($usageType, $outstandingPeriods, $akadCodes);
 
-        // Step 2: Load outstanding data — use query builder for performance (aggregation)
-        // Ref: AGENTS.md §4 — raw query builder diizinkan untuk agregasi berat
-        $outstandingMap = $this->loadOutstandingMap($usageType->value, $outstandingPeriods);
+        // Step 2: Load outstanding data dari financing_account_periods dengan filter akad yang sama.
+        // Ref: AGENTS.md §4 — query builder diizinkan untuk agregasi berat
+        $outstandingMap = $this->loadOutstandingMap($usageType->value, $outstandingPeriods, $akadCodes);
 
-        // Step 3: Load all buckets (B1-B13 for transition, B14 is target/default)
+        // Step 3: Load all buckets (B1–B13 for transition, B14 is target/default)
         $buckets = Bucket::orderBy('bucket_order')->get();
-        $sourceBuckets = $buckets->filter(fn (Bucket $b) => $b->bucket_order < 14); // B1-B13
+        $sourceBuckets = $buckets->filter(fn (Bucket $b) => $b->bucket_order < 14); // B1–B13
 
-        // Step 4: Calculate transition rates for all actual periods (rateStart to projStart-1)
-        $actualRateEnd = PeriodHelper::shiftBack($projStart, 1);
+        // Step 4: Calculate transition rates for all actual periods (rateStart to calculationPeriod)
+        $actualRateEnd = $calculationPeriod;
         $actualPeriods = PeriodHelper::range($rateStart, $actualRateEnd);
 
         // transitionRates[bucket_id][period] = rate
@@ -102,14 +97,25 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
             }
         }
 
-        // Step 5: Calculate projected rates for projStart to calculationPeriod
-        // Using rolling average of forwardProjectionMonths actual rates before projStart
-        $projPeriods = PeriodHelper::range(
-            $projStart,
-            PeriodHelper::shiftForward($calculationPeriod, $this->windowResolver->forwardProjectionMonths()),
+        // Step 5: Calculate projected rates for projStart to compoundEnd.
+        //
+        // Bug 3 fix: periode proyeksi harus mencakup sampai compoundEnd — bukan hanya sampai
+        // calculationPeriod + forwardProjectionMonths — karena compound diagonal untuk bucket
+        // paling awal (B1) membutuhkan chain rate sejauh (13 langkah) ke depan dari setiap
+        // startPeriod. Jika startPeriod = rateStart, chain membutuhkan rate sampai
+        // rateStart + 13 bulan. Dengan memperpanjang projPeriods sampai cukup jauh
+        // (rateStart + maxBucketDepth + forwardProjectionMonths), semua rate tersedia.
+        $maxBucketDepth = $sourceBuckets->count(); // jumlah langkah chain terpanjang (B1 → B14 = 13 langkah)
+        $projEnd = PeriodHelper::shiftForward(
+            $rateStart,
+            $maxBucketDepth + $this->windowResolver->forwardProjectionMonths()
         );
+
+        $projPeriods = PeriodHelper::range($projStart, $projEnd);
+
+        $actualRateEndForLookback = PeriodHelper::shiftBack($projStart, 1); // = calculationPeriod
         foreach ($sourceBuckets as $bucket) {
-            $lookbackPeriods = PeriodHelper::range($projLookbackStart, $actualRateEnd);
+            $lookbackPeriods = PeriodHelper::range($projLookbackStart, $actualRateEndForLookback);
             $lookbackRates = array_map(
                 fn (string $p) => $transitionRates[$bucket->id][$p] ?? 0.0,
                 $lookbackPeriods,
@@ -123,8 +129,9 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
             }
         }
 
-        // Step 6: Compute compound flow to loss per bucket per start_period
+        // Step 6: Compute compound flow to loss per bucket per start_period.
         // compound(bucket_i, t) = rate(i→i+1, t) × rate(i+1→i+2, t+1) × ... × rate(13→14, t+n)
+        // compoundPeriods = rateStart..compoundEnd (semua startPeriod yang ingin dievaluasi)
         $compoundPeriods = PeriodHelper::range($rateStart, $compoundEnd);
         $compoundRates = []; // [bucket_id][start_period] = compound_rate
 
@@ -141,6 +148,7 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
                     if ($curBucket === null || $nextBucketId === null) {
                         break;
                     }
+                    // Ambil rate dari transitionRates — tersedia karena projPeriods diperpanjang
                     $rate = $transitionRates[$curBucket->id][$curPeriod] ?? 0.0;
                     $compound *= $rate;
                     $curOrder++;
@@ -178,11 +186,11 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      * Loads the exact historical rows used to build the PD Netflow outstanding map.
      *
      * @param  string[]  $periods
+     * @param  string[]|null  $akadCodes
      * @return array<int, array<string, mixed>>
      */
     private function loadCalculationHistory(int $usageTypeValue, array $periods, ?array $akadCodes = null): array
     {
-        // Baseline identik dengan loadOutstandingMap (A atau W + filter akad + aturan akad 03)
         return PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
@@ -223,20 +231,19 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
 
     /**
      * Loads outstanding data as nested array [period][bucket_id] = total_outstanding.
-     * Data source: financing_account_periods (historical per akun), aggregate per bucket berdasarkan tgkhari.
+     * Data source: financing_account_periods (per akun), di-aggregate per bucket berdasarkan tgkhari.
+     * Filter akad $akadCodes diteruskan dari calculate() agar konsisten dengan segmentasi kalkulator.
      * Ref: AGENTS.md §4 — query builder diizinkan untuk agregasi berat
      *
      * @param  string[]  $periods
+     * @param  string[]|null  $akadCodes  filter kode akad sesuai konfigurasi parameter kalkulasi
      * @return array<string, array<int, float>>
      */
     private function loadOutstandingMap(int $usageTypeValue, array $periods, ?array $akadCodes = null): array
     {
-        // Load semua bucket untuk mapping tgkhari → bucket_id
         $buckets = Bucket::orderBy('bucket_order')->get();
-        $bucketMap = $buckets->keyBy('id');
 
-        // Query historical data dari financing_account_periods
-        // Baseline khusus PD Netflow: stsrec A atau W, filter akad eligible + POKPBY 03 hanya jika JTP.
+        // Query historical data dari financing_account_periods dengan filter akad dari parameter kalkulasi.
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
@@ -253,12 +260,8 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
             $tgkhari = (int) $row->tgkhari;
             $outstanding = (float) $row->outstanding_balance;
 
-            // Tentukan bucket berdasarkan tgkhari
             $bucketId = $this->resolveBucketFromTgkhari($tgkhari, $buckets);
 
-            if (! isset($map[$period])) {
-                $map[$period] = [];
-            }
             if (! isset($map[$period][$bucketId])) {
                 $map[$period][$bucketId] = 0.0;
             }

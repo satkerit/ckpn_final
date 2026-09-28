@@ -117,7 +117,7 @@ final class CkpnCollectiveCalculator
                 ->first();
 
             $outstanding = (float) $staging->outstanding_balance;
-            $tgkmdl = $periodData?->tgkmdl;
+            $tgkmdl = $periodData?->tgkmdl !== null ? (float) $periodData->tgkmdl : null;
 
             // Get EAD berdasarkan POKPBY
             $ead = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);

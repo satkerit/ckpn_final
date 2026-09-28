@@ -318,12 +318,20 @@ class CkpnIndividualResultIndex extends Component
             ? (float) CkpnIndividualResult::where('calculation_period', $this->filterPeriode)->sum('outstanding_balance')
             : 0.0;
 
-        $runLogs = $this->isRunning && $this->individualPeriod !== ''
-            ? CalculationRunLog::where('period', $this->individualPeriod)
+        // Hanya tampilkan batch run TERBARU (id maksimum per UsageType),
+        // bukan seluruh riwayat run log periode tsb.
+        $runLogs = collect();
+        if ($this->isRunning && $this->individualPeriod !== '') {
+            $latestIdsPerUsageType = CalculationRunLog::where('period', $this->individualPeriod)
                 ->where('run_type', RunType::CkpnIndividual->value)
+                ->groupBy('usage_type')
+                ->selectRaw('MAX(id) as latest_id')
+                ->pluck('latest_id');
+
+            $runLogs = CalculationRunLog::whereIn('id', $latestIdsPerUsageType)
                 ->orderBy('usage_type')
-                ->get()
-            : collect();
+                ->get();
+        }
 
         $periods = CkpnPeriod::query()->orderByDesc('period')->pluck('period');
 

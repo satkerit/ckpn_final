@@ -10,9 +10,10 @@ use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\RollingWindowResolver;
 use App\Domain\Ckpn\Services\SnapshotWriter;
+use App\Enums\CalculationMethodKey;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationDataRange;
 use App\Models\CalculationRunLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -90,16 +91,20 @@ class PdNetflowCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil window parameter dari calculation_parameters (Ref: AGENTS.md §9 — jangan hardcode)
-            $windowMonths = (int) (CalculationParameter::where('parameter_key', 'pd_netflow_rolling_window_months')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')  // segment-specific override first
-                ->value('parameter_value') ?? 36);
+            // Ambil window parameter dari calculation_data_ranges (Ref: AGENTS.md §9 — jangan hardcode)
+            $windowMonths = (int) CalculationDataRange::resolveValue(
+                CalculationMethodKey::PdNetflow,
+                'pd_netflow_rolling_window_months',
+                usageType: (int) $this->usageType,
+                default: 36,
+            );
 
-            $forwardMonths = (int) (CalculationParameter::where('parameter_key', 'pd_netflow_forward_projection_months')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? 6);
+            $forwardMonths = (int) CalculationDataRange::resolveValue(
+                CalculationMethodKey::PdNetflow,
+                'pd_netflow_forward_projection_months',
+                usageType: (int) $this->usageType,
+                default: 6,
+            );
 
             $resolver = new RollingWindowResolver($windowMonths, $forwardMonths);
             $validator = new BucketMovementValidator;

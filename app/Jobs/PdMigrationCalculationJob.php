@@ -9,9 +9,10 @@ use App\Domain\Ckpn\Pd\Migration\PdMigrationCalculator;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\SnapshotWriter;
+use App\Enums\CalculationMethodKey;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationDataRange;
 use App\Models\CalculationRunLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -88,11 +89,13 @@ class PdMigrationCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil jumlah matriks migrasi dari calculation_parameters (Ref: AGENTS.md §9 — jangan hardcode)
-            $matrixCount = (int) (CalculationParameter::where('parameter_key', 'pd_migration_matrix_count')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? 4);
+            // Ambil jumlah matriks migrasi dari calculation_data_ranges (Ref: AGENTS.md §9 — jangan hardcode)
+            $matrixCount = (int) CalculationDataRange::resolveValue(
+                CalculationMethodKey::PdMigration,
+                'pd_migration_matrix_count',
+                usageType: (int) $this->usageType,
+                default: 4,
+            );
 
             $builder = new MigrationMatrixBuilder;
             $calculator = new PdMigrationCalculator($builder, $matrixCount);

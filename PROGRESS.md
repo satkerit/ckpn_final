@@ -1,3 +1,42 @@
+## [2026-09-28] Fix PD Netflow Failed: Skema Tabel Detail & Resolusi Parameter Segmen
+
+- Status: Done
+- Modul: PD Netflow — snapshot detail, Parameter Kalkulasi, segmentasi per segmen
+- Ref PRD: Bab 7, 15
+- Perubahan:
+  - Root cause job PD Netflow status Failed: `SnapshotWriter::writePdNetflowDetail()` menulis kolom `usage_type`, tetapi tabel `pd_netflow_bucket_movement` & `pd_netflow_compound_rate` masih memakai `risk_segment_id` (sisa skema lama) → QueryException "Unknown column 'usage_type'". Diperbaiki via migration pengganti kolom + index non-unique (retry job tidak bentrok unique).
+  - Fix resolusi parameter per-segmen: `CalculationDataRange::resolveValue()` membandingkan enum `UsageType` (hasil cast kolom) dengan int argumen sehingga baris segmen spesifik TIDAK PERNAH cocok dan selalu jatuh ke global. Kini dinormalisasi ke int.
+  - Fix UniqueConstraintViolation `uq_column_config_method_pokpby` pada UI Parameter Kalkulasi: simpan konfigurasi kolom pakai `updateOrCreate` kunci (method, pokpby_code).
+  - Test `PdNetflowFeatureTest` dimigrasi dari model lama `CalculationParameter` (tabel sudah dihapus) ke `CalculationDataRange` + assert resolusi parameter per-segmen.
+  - Verifikasi segmentasi: semua job (Netflow, Migration, LGD ER/CS/Final, CKPN Individual/Kolektif) iterasi `UsageType::cases()`, filter akad dari `calculation_column_configs` (AkadEligibilityService) diterapkan konsisten di engine; parameter window/proyeksi diambil via `CalculationDataRange::resolveValue` dengan prioritas kantor > jenis penggunaan > akad > global. Kunci segmentasi kantor (`office_code`) belum dipakai sebagai pemecah snapshot hasil (hanya pemecah segmen penggunaan yang dipakai job) — dicatat sebagai open item PRD Bab 12.
+- File utama: `database/migrations/2026_09_28_220000_replace_risk_segment_with_usage_type_on_pd_netflow_details.php`, `app/Models/CalculationDataRange.php`, `app/Livewire/Ckpn/CalculationParameterIndex.php`, `tests/Feature/PdNetflowFeatureTest.php`
+- Verifikasi: migration sukses; full test suite 83 passed (248 assertions).
+- Next: konfirmasi user apakah hasil perhitungan perlu dipecah juga per kode kantor (level 1 segmentasi) atau cukup per jenis penggunaan/akad via parameter.
+
+## [2026-09-28] Fix TypeError: tgkmdl null pada Perhitungan CKPN Individual
+
+- Status: Done
+- Modul: CKPN Individual / CKPN Kolektif — EAD resolution
+- Ref PRD: Bab 6.1, 11
+- Perubahan:
+  - `tgkmdl` dari query builder dikembalikan sebagai `string|null`; ketika NULL diteruskan ke `PokpbyCriteriaService::getEadValue()` yang bertipe `?float` sehingga memicu TypeError.
+  - Normalisasi nilai `tgkmdl` ke `?float` sebelum dipakai pada `CkpnIndividualCalculator` dan `CkpnCollectiveCalculator`.
+- File: `app/Domain/Ckpn/Individual/CkpnIndividualCalculator.php`, `app/Domain/Ckpn/Collective/CkpnCollectiveCalculator.php`
+- Verifikasi: `pint` PASS (2 files).
+
+## [2026-09-28] UI Pengelolaan Parameter Kalkulasi Terstruktur (Tab 3) & Migration calculation_segmentation_values
+
+- Status: Done
+- Modul: Parameter Kalkulasi — Livewire `CalculationParameterIndex` & Schema
+- Ref PRD: Bab 5, 6.1, 7, 8, 9, 10, 15
+- Perubahan:
+  - Dibuat migration `2026_09_28_150000_create_calculation_segmentation_values_table.php` untuk tabel `calculation_segmentation_values` yang di-relasikan oleh model `CalculationSegmentationLevel`.
+  - Komponen Livewire baru + Blade view untuk mengelola tabel parameter terstruktur.
+  - Sub-tab CRUD: Kolom Tabel, Rentang Data PD/LGD, Segmentasi Bertingkat, Parameter Umum.
+- File: `database/migrations/2026_09_28_150000_create_calculation_segmentation_values_table.php`, `app/Livewire/Ckpn/CalculationParameterIndex.php`, `resources/views/livewire/ckpn/calculation-parameter-index.blade.php`
+- Verifikasi: `php artisan migrate` PASS; seeder PASS; `pint` PASS.
+- Next step: seed nilai rentang produksi bila open item PRD Bab 12 sudah dikonfirmasi.
+
 ## [2026-09-28] Fix Komprehensif Progress Bar Tidak Bergerak / Tidak Muncul
 
 - Status: Done

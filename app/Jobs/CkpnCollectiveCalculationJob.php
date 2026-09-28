@@ -9,7 +9,7 @@ use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\SnapshotWriter;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -96,11 +96,9 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Resolve PD method dari parameter jika tidak di-pass eksplisit
-            $pdMethod = CalculationParameter::where('parameter_key', 'ckpn_collective_pd_method')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? $this->pdMethod;
+            // Resolve PD method dari setting; konstruktor dipakai sebagai fallback jika setting kosong.
+            $setting = CalculationGeneralSetting::value('ckpn_collective_pd_method');
+            $pdMethod = $setting !== '' ? $setting : $this->pdMethod;
 
             $calculator = new CkpnCollectiveCalculator((string) $pdMethod);
             $writer = new SnapshotWriter;

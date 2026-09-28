@@ -6,7 +6,7 @@ namespace App\Domain\Ckpn\Preview;
 
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\LgdCollateralShortfallResult;
 use App\Models\LgdExpectedRecoveriesResult;
 use App\Models\PdMigrationResult;
@@ -204,8 +204,8 @@ final class CkpnPreviewService
      * Tentukan tanggal cutoff validitas penilaian agunan berdasarkan parameter sistem.
      * Ref: PRD Bab 12 (open item — nilai default 24 bulan)
      *
-     * Membaca parameter 'collateral_appraisal_validity_months' dari tabel calculation_parameters
-     * (scope all-account, usage_type = null). Jika parameter tidak ada, default 24 bulan.
+     * Membaca parameter 'collateral_appraisal_validity_months' dari calculation_general_settings.
+     * Jika parameter tidak ada, default 24 bulan.
      *
      * Penilaian agunan dianggap valid hanya jika tanggal penilaian terakhir (appraised_at)
      * >= tanggal cutoff yang dikembalikan method ini.
@@ -215,9 +215,7 @@ final class CkpnPreviewService
     private function appraisalCutoffDate(): string
     {
         // TODO(PRD Bab 12): usia maksimal penilaian agunan belum dikonfirmasi, default 24 bulan.
-        $months = max(0, (int) (CalculationParameter::whereNull('usage_type')
-            ->where('parameter_key', 'collateral_appraisal_validity_months')
-            ->value('parameter_value') ?? 24));
+        $months = max(0, CalculationGeneralSetting::intValue('collateral_appraisal_validity_months', 24));
 
         return now()->subMonths($months)->toDateString();
     }
@@ -226,8 +224,8 @@ final class CkpnPreviewService
      * Ambil PD rate untuk satu akun berdasarkan segmen, periode, dan kolektibilitas.
      * Ref: PRD Bab 7 & 8
      *
-     * Metode PD yang dipakai (netflow/migration) dibaca dari calculation_parameters
-     * dengan key 'ckpn_collective_pd_method', spesifik segmen > all-account.
+     * Metode PD yang dipakai (netflow/migration) dibaca dari calculation_general_settings
+     * dengan key 'ckpn_collective_pd_method'.
      *
      * Logika pemilihan rate:
      *   - 'netflow'   → PdNetflowResult, key = from_bucket_id
@@ -246,10 +244,7 @@ final class CkpnPreviewService
         $cacheKey = $usageType->value.'|'.$period;
         if (! isset($this->pdRateCache[$cacheKey])) {
             // Sumber metode PD konsisten dengan CkpnCollectiveCalculationJob
-            $method = (string) (CalculationParameter::where('parameter_key', 'ckpn_collective_pd_method')
-                ->where(fn ($q) => $q->where('usage_type', $usageType->value)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? 'netflow');
+            $method = CalculationGeneralSetting::value('ckpn_collective_pd_method', 'netflow');
 
             $rates = $method === 'migration'
                 ? PdMigrationResult::where('usage_type', $usageType->value)

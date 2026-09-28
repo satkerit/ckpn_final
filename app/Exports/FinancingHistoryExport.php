@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Exports;
 
 use App\Domain\Ckpn\Services\PeriodHelper;
+use App\Enums\CalculationMethodKey;
 use App\Enums\UsageType;
+use App\Models\CalculationDataRange;
 use App\Models\FinancingAccountPeriod;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\DB;
 
 /** Export data historis pembiayaan yang menjadi observasi PD Netflow. Ref: PRD Bab 7 */
 final class FinancingHistoryExport
@@ -20,16 +21,13 @@ final class FinancingHistoryExport
 
     public function query(): Builder
     {
-        $windowQuery = DB::table('calculation_parameters')
-            ->where('parameter_key', 'pd_netflow_rolling_window_months');
-
-        if ($this->usageType !== '') {
-            $windowQuery->where('usage_type', $this->usageType);
-        } else {
-            $windowQuery->whereNull('usage_type');
-        }
-
-        $window = (int) ($windowQuery->value('parameter_value') ?? 36);
+        $usageTypeValue = $this->usageType !== '' ? (int) $this->usageType : null;
+        $window = (int) CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdNetflow,
+            'pd_netflow_rolling_window_months',
+            usageType: $usageTypeValue,
+            default: 36,
+        );
         $start = PeriodHelper::shiftBack($this->calculationPeriod, $window);
 
         return FinancingAccountPeriod::query()

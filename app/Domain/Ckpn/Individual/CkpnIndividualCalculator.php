@@ -113,9 +113,10 @@ final class CkpnIndividualCalculator
             }
 
             // Get nilai EAD berdasarkan POKPBY
-            $tgkmdl = FinancingAccountPeriod::where('financing_account_id', $account->id)
+            $rawTgkmdl = FinancingAccountPeriod::where('financing_account_id', $account->id)
                 ->where('period', $calculationPeriod)
                 ->value('tgkmdl');
+            $tgkmdl = $rawTgkmdl !== null ? (float) $rawTgkmdl : null;
 
             $outstanding = (float) $staging->outstanding_balance;
             $eadValue = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);

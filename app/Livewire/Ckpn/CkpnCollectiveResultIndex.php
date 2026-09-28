@@ -8,7 +8,7 @@ use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
 use App\Jobs\CkpnCollectiveCalculationJob;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnCollectiveResult;
 use App\Models\CkpnPeriod;
@@ -172,7 +172,7 @@ class CkpnCollectiveResultIndex extends Component
      */
     public function isDualPdMethod(): bool
     {
-        return CalculationParameter::getValue('allow_dual_pd_method', '0') === '1';
+        return CalculationGeneralSetting::value('allow_dual_pd_method', '0') === '1';
     }
 
     public function confirmJalankan(): void
@@ -689,10 +689,7 @@ class CkpnCollectiveResultIndex extends Component
      */
     private function resolvePdMethod(UsageType $usageType): string
     {
-        return (string) (CalculationParameter::where('parameter_key', 'ckpn_collective_pd_method')
-            ->where(fn ($q) => $q->where('usage_type', $usageType->value)->orWhereNull('usage_type'))
-            ->orderByRaw('usage_type IS NULL ASC')
-            ->value('parameter_value') ?? 'netflow');
+        return CalculationGeneralSetting::value('ckpn_collective_pd_method', 'netflow');
     }
 
     public function render(): View

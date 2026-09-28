@@ -8,9 +8,10 @@ use App\Domain\Ckpn\Lgd\ExpectedRecoveries\LgdExpectedRecoveriesCalculator;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\SnapshotWriter;
+use App\Enums\CalculationMethodKey;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationDataRange;
 use App\Models\CalculationRunLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -104,15 +105,19 @@ class LgdErCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            $windowYears = (int) (CalculationParameter::where('parameter_key', 'lgd_er_rolling_window_years')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? 5);
+            $windowYears = (int) CalculationDataRange::resolveValue(
+                CalculationMethodKey::LgdExpectedRecoveries,
+                'lgd_er_rolling_window_years',
+                usageType: $this->usageType,
+                default: 5,
+            );
 
-            $useAllAccount = (bool) (CalculationParameter::where('parameter_key', 'lgd_er_use_all_account')
-                ->where(fn ($q) => $q->where('usage_type', $this->usageType)->orWhereNull('usage_type'))
-                ->orderByRaw('usage_type IS NULL ASC')
-                ->value('parameter_value') ?? false);
+            $useAllAccount = (bool) CalculationDataRange::resolveValue(
+                CalculationMethodKey::LgdExpectedRecoveries,
+                'lgd_er_use_all_account',
+                usageType: $this->usageType,
+                default: false,
+            );
 
             $calculator = new LgdExpectedRecoveriesCalculator($windowYears, $useAllAccount);
             $writer = new SnapshotWriter;

@@ -7,7 +7,7 @@ namespace App\Jobs;
 use App\Enums\ClassificationType;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
 use App\Models\CkpnPeriodClassification;
@@ -93,14 +93,10 @@ class ClassifyPeriodDataJob implements ShouldQueue
         ]);
 
         try {
-            // Ambil parameter klasifikasi dari tabel parameter — Ref: AGENTS.md §9
-            $nplMinCollectibility = (int) (CalculationParameter::whereNull('usage_type')
-                ->where('parameter_key', 'npl_min_collectibility')
-                ->value('parameter_value') ?? 3);
+            // Ambil parameter klasifikasi dari calculation_general_settings — Ref: AGENTS.md §9
+            $nplMinCollectibility = CalculationGeneralSetting::intValue('npl_min_collectibility', 3);
 
-            $topN = (int) (CalculationParameter::whereNull('usage_type')
-                ->where('parameter_key', 'ckpn_individual_top_n_outstanding')
-                ->value('parameter_value') ?? 10);
+            $topN = CalculationGeneralSetting::intValue('ckpn_individual_top_n_outstanding', 10);
 
             // Ambil semua data staging periode ini
             $stagingData = CkpnPeriodClassification::where('period', $period)->get();

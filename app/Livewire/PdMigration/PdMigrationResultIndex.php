@@ -9,7 +9,7 @@ use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
 use App\Jobs\PdMigrationCalculationJob;
-use App\Models\CalculationParameter;
+use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
 use App\Models\PdMigrationMatrix;
@@ -110,7 +110,7 @@ class PdMigrationResultIndex extends Component
      */
     private function isAllowedPdMethod(string $periode): bool
     {
-        $isDual = CalculationParameter::getValue('allow_dual_pd_method', '0') === '1';
+        $isDual = CalculationGeneralSetting::value('allow_dual_pd_method', '0') === '1';
 
         if ($isDual) {
             return true;

@@ -6,8 +6,9 @@ namespace App\Services;
 
 use App\Domain\Ckpn\Pd\Netflow\PdNetflowBaseline;
 use App\Domain\Ckpn\Services\PeriodHelper;
+use App\Enums\CalculationMethodKey;
 use App\Models\Bucket;
-use App\Models\CalculationParameter;
+use App\Models\CalculationDataRange;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -48,22 +49,22 @@ final class PdNetflowDetailService
      */
     private function windowMonths(?string $usageType): int
     {
-        $query = CalculationParameter::where('parameter_key', 'pd_netflow_rolling_window_months');
-        if ($usageType !== null) {
-            $query->where('usage_type', $usageType);
-        }
+        $value = CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdNetflow,
+            'pd_netflow_rolling_window_months',
+            usageType: $usageType !== null ? (int) $usageType : null,
+            default: 36,
+        );
 
-        $param = $query->value('parameter_value');
-
-        return $param ? (int) $param : 36;
+        return (int) $value;
     }
 
     /**
-     * Ambil jumlah bulan proyeksi ke depan dari calculation_parameters.
+     * Ambil jumlah bulan proyeksi ke depan dari calculation_data_ranges.
      *
      * Parameter key : 'pd_netflow_forward_projection_months'
      * Default       : 12 bulan (1 tahun ke depan dari calculationPeriod)
-     * Scope priority: segment-specific > all-account
+     * Scope priority: segmen paling spesifik > global
      *
      * Proyeksi menghitung transition rate ke depan untuk periode yang belum ada datanya,
      * menggunakan rata-rata lookback dari periode historis yang sudah ada.
@@ -73,18 +74,18 @@ final class PdNetflowDetailService
      */
     private function forwardMonths(?string $usageType): int
     {
-        $query = CalculationParameter::where('parameter_key', 'pd_netflow_forward_projection_months');
-        if ($usageType !== null) {
-            $query->where('usage_type', $usageType);
-        }
+        $value = CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdNetflow,
+            'pd_netflow_forward_projection_months',
+            usageType: $usageType !== null ? (int) $usageType : null,
+            default: 12,
+        );
 
-        $param = $query->value('parameter_value');
-
-        return $param ? (int) $param : 12;
+        return (int) $value;
     }
 
     /**
-     * Ambil metode proyeksi transition rate dari calculation_parameters.
+     * Ambil metode proyeksi transition rate dari calculation_data_ranges.
      *
      * Parameter key : 'pd_netflow_projection_method'
      * Nilai valid   : 'rolling' | 'full'
@@ -98,12 +99,14 @@ final class PdNetflowDetailService
      */
     private function projectionMethod(?string $usageType): string
     {
-        $query = CalculationParameter::where('parameter_key', 'pd_netflow_projection_method');
-        if ($usageType !== null) {
-            $query->where('usage_type', $usageType);
-        }
+        $value = CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdNetflow,
+            'pd_netflow_projection_method',
+            usageType: $usageType !== null ? (int) $usageType : null,
+            default: 'rolling',
+        );
 
-        return $query->value('parameter_value') ?? 'rolling';
+        return (string) $value;
     }
 
     /**
@@ -122,13 +125,14 @@ final class PdNetflowDetailService
      */
     private function projectionLookbackMonths(?string $usageType): int
     {
-        $query = CalculationParameter::where('parameter_key', 'pd_netflow_projection_lookback_months');
-        if ($usageType !== null) {
-            $query->where('usage_type', $usageType);
-        }
-        $param = $query->value('parameter_value');
+        $value = CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdNetflow,
+            'pd_netflow_projection_lookback_months',
+            usageType: $usageType !== null ? (int) $usageType : null,
+            default: null,
+        );
 
-        return $param ? (int) $param : $this->windowMonths($usageType);
+        return $value !== null ? (int) $value : $this->windowMonths($usageType);
     }
 
     /**

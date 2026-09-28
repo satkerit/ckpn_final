@@ -24,7 +24,6 @@ use App\Livewire\Kalkulasi\HasilCkpnIndex;
 use App\Livewire\Kalkulasi\LossGivenDefaultIndex;
 use App\Livewire\Kalkulasi\ProbabilitasDefaultIndex;
 use App\Livewire\MasterData\BucketIndex;
-use App\Livewire\MasterData\CalculationParameterIndex;
 use App\Livewire\MasterData\CollateralTypeIndex;
 use App\Livewire\MasterData\QualityGradeIndex;
 use App\Livewire\PdNetflow\PdNetflowPivotIndex;
@@ -107,7 +106,6 @@ Route::middleware('auth')->group(function (): void {
         })->name('upload.template.download');
 
         // Master data
-        Route::get('/master-data/parameters', CalculationParameterIndex::class)->name('master-data.parameters.index');
         Route::get('/master-data/buckets', BucketIndex::class)->name('master-data.buckets.index');
         Route::get('/master-data/quality-grades', QualityGradeIndex::class)->name('master-data.quality-grades.index');
         Route::get('/master-data/collateral-types', CollateralTypeIndex::class)->name('master-data.collateral-types.index');

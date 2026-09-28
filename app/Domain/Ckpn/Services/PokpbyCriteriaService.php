@@ -4,53 +4,44 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Services;
 
-use App\Models\CalculationParameter;
+use App\Enums\ParameterMethod;
+use App\Models\CalculationColumnConfig;
 use App\Models\FinancingAccountPeriod;
 use Illuminate\Support\Carbon;
 
 /**
  * Service untuk menangani kriteria POKPBY (Kode Jenis Akad) dalam perhitungan CKPN/EAD.
  *
- * Parameter kustom yang digunakan:
- * - pokpby_special_criteria_list: daftar POKPBY yang memerlukan kriteria khusus (pisah koma)
- * - pokpby_require_maturity: mapping POKPBY ke requirement jatuh tempo (format: POKPBY=1 atau POKPBY=0)
- * - pokpby_ead_field: mapping POKPBY ke field EAD yang digunakan (format: POKPBY=field_name)
- * - default_ead_field: field default jika POKPBY tidak ada dalam mapping
+ * Konfigurasi dibaca dari tabel terstruktur `calculation_column_configs`
+ * (method=ead): kolom EAD per POKPBY + flag wajib jatuh tempo.
  *
- * Ref: Permintaan customer - untuk POKPBY='10' harus sudah jatuh tempo
- *      dan yang digunakan adalah tgkmdl bukan osmdlc/outstanding pokok
+ * Ref: Permintaan customer - POKPBY='10' harus sudah jatuh tempo dan memakai tgkmdl.
  */
 class PokpbyCriteriaService
 {
-    /** @var array<int> Daftar POKPBY yang memerlukan kriteria khusus (cached) */
+    /** Field EAD fallback jika POKPBY tidak punya konfigurasi kolom aktif. */
+    private const DEFAULT_EAD_FIELD = 'outstanding_balance';
+
+    /** @var array<int>|null Daftar POKPBY dengan kriteria khusus (cached) */
     private static ?array $specialCriteriaList = null;
 
-    /** @var array<string, int> Mapping POKPBY ke requirement jatuh tempo (cached) */
-    private static ?array $requireMaturityMap = null;
-
-    /** @var array<string, string> Mapping POKPBY ke field EAD yang digunakan (cached) */
-    private static ?array $eadFieldMap = null;
-
-    /** @var string Field default untuk EAD jika POKPBY tidak ada dalam mapping (cached) */
-    private static ?string $defaultEadField = null;
-
     /**
-     * Get daftar POKPBY yang memerlukan kriteria khusus.
+     * Get daftar POKPBY yang memerlukan kriteria khusus — yaitu yang punya
+     * konfigurasi kolom EAD aktif dengan flag jatuh tempo atau kolom non-default.
      *
-     * @return array<int> Array of POKPBY codes as integers
+     * @return array<int>
      */
     public static function getSpecialCriteriaPokpbyList(): array
     {
         if (self::$specialCriteriaList === null) {
-            $value = CalculationParameter::where('parameter_key', 'pokpby_special_criteria_list')
-                ->value('parameter_value') ?? '';
-
-            $list = array_filter(
-                array_map('trim', explode(',', $value)),
-                fn ($code) => $code !== ''
-            );
-
-            self::$specialCriteriaList = array_map('intval', $list);
+            self::$specialCriteriaList = CalculationColumnConfig::query()
+                ->where('method', ParameterMethod::Ead->value)
+                ->where('is_active', true)
+                ->where(fn ($q) => $q->where('require_maturity', true)
+                    ->orWhere('column_name', '!=', self::DEFAULT_EAD_FIELD))
+                ->pluck('pokpby_code')
+                ->map(fn ($code) => (int) $code)
+                ->all();
         }
 
         return self::$specialCriteriaList;
@@ -69,57 +60,21 @@ class PokpbyCriteriaService
      */
     public static function requiresMaturity(int $pokpbyCode): bool
     {
-        if (self::$requireMaturityMap === null) {
-            $value = CalculationParameter::where('parameter_key', 'pokpby_require_maturity')
-                ->value('parameter_value') ?? '';
-
-            $map = [];
-            $pairs = array_filter(
-                array_map('trim', explode(',', $value)),
-                fn ($pair) => $pair !== ''
-            );
-
-            foreach ($pairs as $pair) {
-                if (str_contains($pair, '=')) {
-                    [$code, $flag] = explode('=', $pair, 2);
-                    $map[trim($code)] = (int) trim($flag);
-                }
-            }
-
-            self::$requireMaturityMap = $map;
-        }
-
-        return (bool) (self::$requireMaturityMap[(string) $pokpbyCode] ?? 0);
+        return CalculationColumnConfig::requiresMaturity((string) $pokpbyCode);
     }
 
     /**
      * Get field yang digunakan untuk EAD berdasarkan POKPBY.
      *
-     * @return string 'tgkmdl' atau 'outstanding_balance'
+     * @return string nama kolom pada financing_account_periods
      */
     public static function getEadFieldForPokpby(int $pokpbyCode): string
     {
-        if (self::$eadFieldMap === null) {
-            $value = CalculationParameter::where('parameter_key', 'pokpby_ead_field')
-                ->value('parameter_value') ?? '';
-
-            $map = [];
-            $pairs = array_filter(
-                array_map('trim', explode(',', $value)),
-                fn ($pair) => $pair !== ''
-            );
-
-            foreach ($pairs as $pair) {
-                if (str_contains($pair, '=')) {
-                    [$code, $field] = explode('=', $pair, 2);
-                    $map[trim($code)] = trim($field);
-                }
-            }
-
-            self::$eadFieldMap = $map;
-        }
-
-        return self::$eadFieldMap[(string) $pokpbyCode] ?? self::getDefaultEadField();
+        return CalculationColumnConfig::columnFor(
+            ParameterMethod::Ead,
+            (string) $pokpbyCode,
+            self::DEFAULT_EAD_FIELD
+        );
     }
 
     /**
@@ -127,12 +82,7 @@ class PokpbyCriteriaService
      */
     public static function getDefaultEadField(): string
     {
-        if (self::$defaultEadField === null) {
-            self::$defaultEadField = CalculationParameter::where('parameter_key', 'default_ead_field')
-                ->value('parameter_value') ?? 'outstanding_balance';
-        }
-
-        return self::$defaultEadField;
+        return self::DEFAULT_EAD_FIELD;
     }
 
     /**
