@@ -14,13 +14,19 @@
                     headers: { 'Accept': 'application/json' },
                 });
 
+                if (response.status === 404) {
+                    // Server masih menyiapkan data progress — biarkan dialog menampilkan info menunggu.
+                    window.updateProgress(0, 'Menyiapkan proses di server...', '');
+                    return;
+                }
+
                 if (!response.ok) return;
 
                 const payload = await response.json();
                 const data = payload?.data;
                 if (!data) return;
 
-                const percentage = Math.round(Number(data.percentage) || 0);
+                const percentage = Math.min(100, Math.max(0, Math.round(Number(data.percentage) || 0)));
                 const text = data.status_text || 'Memproses data...';
                 const info = (data.current_step && data.total_steps)
                     ? data.current_step.toLocaleString('id-ID') + ' / ' + data.total_steps.toLocaleString('id-ID') + ' baris'
@@ -31,7 +37,7 @@
                 // Abaikan error jaringan sesaat; polling berikutnya akan mencoba lagi.
             }
         },
-        startProgress(detail) {
+        startProgress(detail, wire) {
             this.stopProgress();
             window.showUploadProgress('Memproses ' + (detail.label || 'Data') + '...');
 
@@ -44,7 +50,11 @@
             this.progressTimer = setInterval(() => this.pollProgress(detail.batchId), 1000);
 
             // Tahap impor berat dijalankan di background (tanpa await) agar dialog tetap responsif.
-            $wire.executeUpload(detail.batchId);
+            wire.executeUpload(detail.batchId).catch(() => {
+                this.stopProgress();
+                window.Swal.close();
+                window.showError('Koneksi ke server terputus saat memproses. Cek status di halaman Riwayat Upload.');
+            });
         },
         finishProgress(detail) {
             this.stopProgress();
@@ -61,7 +71,7 @@
             }
         },
     }"
-    x-on:start-upload-progress.window="startProgress($event.detail)"
+    x-on:start-upload-progress.window="startProgress($event.detail, $wire)"
     x-on:upload-finished.window="finishProgress($event.detail)">
     <div class="mb-6">
         <h2 class="text-base font-semibold text-zinc-100">Upload Data Pembiayaan</h2>

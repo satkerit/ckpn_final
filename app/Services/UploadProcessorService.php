@@ -27,6 +27,9 @@ class UploadProcessorService
 
     protected int $batchId = 0;
 
+    /** Interval update progress (baris) — dihitung dinamis dari total baris file. */
+    protected int $progressInterval = 50;
+
     /**
      * Jalankan proses parsing dan impor file langsung secara streaming.
      */
@@ -59,6 +62,11 @@ class UploadProcessorService
             @set_time_limit(1800);
         }
 
+        // Inisialisasi progress SEBELUM pre-scan agar polling API tidak 404
+        // saat file besar sedang dihitung jumlah barisnya.
+        $this->initializeProgress((string) $batchId);
+        $this->updateProgress(['status_title' => 'Menganalisis file...', 'status_text' => 'Menghitung total baris file...']);
+
         // Scan cepat untuk hitung total baris — dipakai sebagai totalSteps agar progress bar akurat
         try {
             $countReader = $this->createReader($filePath);
@@ -76,7 +84,11 @@ class UploadProcessorService
             throw $e;
         }
 
-        $this->initializeProgress((string) $batchId, $totalRows);
+        $this->setTotalSteps($totalRows);
+
+        // Interval progress dinamis: update ±20x selama proses (min 10 baris,
+        // max 100 baris) agar file kecil tetap menunjukkan pergerakan.
+        $this->progressInterval = max(10, min(100, (int) ceil($totalRows / 20)));
 
         try {
             match ($uploadType) {
@@ -181,7 +193,7 @@ class UploadProcessorService
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
 
-                if ($processedRows % 250 === 0) {
+                if ($processedRows % $this->progressInterval === 0) {
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
             } catch (Throwable $e) {
@@ -376,7 +388,7 @@ class UploadProcessorService
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
 
-                if ($processedRows % 500 === 0) {
+                if ($processedRows % $this->progressInterval === 0) {
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
             } catch (Throwable $e) {
@@ -626,7 +638,7 @@ class UploadProcessorService
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
                 }
 
-                if ($processedRows % 250 === 0) {
+                if ($processedRows % $this->progressInterval === 0) {
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, $skippedNotFound + $skippedInvalidType);
                 }
             } catch (Throwable $e) {
@@ -781,6 +793,8 @@ class UploadProcessorService
                 if (count($buffer) >= $batchSize) {
                     $this->flushOfficeBuffer($buffer, $importedRows, $skippedRows, $errors);
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                } elseif ($processedRows % $this->progressInterval === 0) {
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
             } catch (Throwable $e) {
                 $skippedRows++;
@@ -918,6 +932,8 @@ class UploadProcessorService
 
                 if (count($buffer) >= $batchSize) {
                     $this->flushCollateralTypeBuffer($buffer, $importedRows, $skippedRows, $errors);
+                    $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
+                } elseif ($processedRows % $this->progressInterval === 0) {
                     $this->updateBatchProgress($processedRows, $importedRows, $skippedRows, count($errors));
                 }
             } catch (Throwable $e) {

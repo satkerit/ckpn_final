@@ -119,6 +119,18 @@ trait HasProgressTracking
     }
 
     /**
+     * Set total langkah setelah jumlah baris file diketahui (mis. hasil pre-scan).
+     * Wajib agar persentase progress dapat dihitung sebelum loop impor berjalan.
+     */
+    protected function setTotalSteps(int $totalSteps): void
+    {
+        $this->totalSteps = $totalSteps;
+        $this->progressData['total_steps'] = $totalSteps;
+
+        $this->updateProgress();
+    }
+
+    /**
      * Update progress with batch information
      */
     protected function updateBatchProgress(

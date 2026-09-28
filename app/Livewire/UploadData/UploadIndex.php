@@ -177,6 +177,14 @@ class UploadIndex extends Component
 
         $fullPath = Storage::disk('local')->path($batch->file_path);
 
+        // Lepas kunci session (SESSION_DRIVER=database) SEBELUM proses berat.
+        // Tanpa ini, request polling progress dari user yang sama mengantre
+        // di belakang request ini sampai impor selesai → progress bar macet di 0%.
+        session()->save();
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+
         $exceptionMessage = '';
 
         try {

@@ -17,11 +17,33 @@ window.Toast = Swal.mixin({
 });
 
 // Progress dialog untuk upload
+let progressState = { percentage: 0, text: 'Memulai upload...', fileInfo: '' };
+
+function applyProgress() {
+    const progressBar = document.getElementById('progress-bar');
+    const percentage = document.getElementById('progress-percentage');
+    const progressText = document.getElementById('progress-text');
+    const fileInfoElement = document.getElementById('file-info');
+
+    if (progressBar) progressBar.style.width = progressState.percentage + '%';
+    if (percentage) percentage.textContent = Math.round(progressState.percentage) + '%';
+    if (progressText) progressText.textContent = progressState.text;
+    if (fileInfoElement) fileInfoElement.textContent = progressState.fileInfo;
+
+    return !!progressBar;
+}
+
 window.showUploadProgress = (title = 'Mengupload Data...') => {
+    progressState = { percentage: 0, text: 'Memulai upload...', fileInfo: '' };
+
     return Swal.fire({
         title: title,
         html: `
             <div class="mb-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-gray-500">Progress</span>
+                    <span id="progress-percentage" class="text-sm font-bold text-blue-600">0%</span>
+                </div>
                 <div class="flex items-center justify-center mb-3">
                     <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
                 </div>
@@ -37,25 +59,20 @@ window.showUploadProgress = (title = 'Mengupload Data...') => {
         showConfirmButton: false,
         customClass: {
             popup: 'animate__animated animate__fadeIn'
+        },
+        didOpen: () => {
+            applyProgress();
         }
     });
 };
 
 // Update progress dialog
 window.updateProgress = (percentage, text = '', fileInfo = '') => {
-    const progressBar = document.getElementById('progress-bar');
-    const progressText = document.getElementById('progress-text');
-    const fileInfoElement = document.getElementById('file-info');
-    
-    if (progressBar) {
-        progressBar.style.width = percentage + '%';
-    }
-    if (progressText) {
-        progressText.textContent = text;
-    }
-    if (fileInfoElement) {
-        fileInfoElement.textContent = fileInfo;
-    }
+    progressState.percentage = Number(percentage) || 0;
+    if (text !== '') progressState.text = text;
+    if (fileInfo !== '') progressState.fileInfo = fileInfo;
+
+    applyProgress();
 };
 
 // Confirmation dialog utilities

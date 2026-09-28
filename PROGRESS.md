@@ -1,3 +1,16 @@
+## [2026-09-28] Fix Komprehensif Progress Bar Tidak Bergerak / Tidak Muncul
+
+- Status: Done
+- Modul: Upload Data — Progress Tracking (session lock, cache init, interval, UI, API fallback)
+- Ref PRD: Bab 3
+- Perubahan (5 akar masalah):
+  1. **Session lock** (`SESSION_DRIVER=database`): request polling `/api/upload-progress/{id}` (middleware `auth`) mengantre di belakang request `wire.executeUpload()` yang memegang lock session → progress macet. Fix: `session()->save()` + `session_write_close()` sebelum proses berat di `UploadIndex::executeUpload()`.
+  2. `initializeProgress()` dipanggil SETELAH pre-scan `countTotalRows()` → cache progress belum ada saat polling awal → API 404 terus-menerus. Fix: init SEBELUM pre-scan + `setTotalSteps($totalRows)` (method baru di `HasProgressTracking`) setelah pre-scan.
+  3. Modulo tetap `% 250` / `% 500` tidak pernah true untuk file kecil → progress 0% sampai selesai. Fix: `$progressInterval = max(10, min(100, ceil($totalRows / 20)))` (properti baru) dipakai di 5 pipeline, plus `elseif` update progress untuk `financing_office` & `collateral_type` yang sebelumnya hanya update saat buffer flush.
+  4. Dialog SweetAlert2 tidak punya angka persen & elemen bisa null saat render async. Fix: tambah `#progress-percentage`, simpan `progressState` + `applyProgress()` + `didOpen` di `resources/js/app.js`, dan `npm run build`.
+  5. API 404 tanpa fallback saat cache miss. Fix: `UploadProgressController::buildProgressFromBatch()` menghitung persentase dari `processed_rows/total_rows` batch record.
+- File: `app/Traits/HasProgressTracking.php`, `app/Services/UploadProcessorService.php`, `app/Livewire/UploadData/UploadIndex.php`, `app/Http/Controllers/Api/UploadProgressController.php`, `resources/js/app.js`, `public/build/*`
+- Verifikasi: pint PASS (330 files); `php -l` bersih; `npm run build` sukses; `view:clear` OK.
 
 ## [2026-09-28] Fix Progress Bar — Persentase Tidak Bergerak
 
