@@ -46,7 +46,7 @@ final class DispatchCkpnCollectiveCalculationAction
                 CkpnCollectiveCalculationJob::dispatch(
                     $runLog->id,
                     $data['calculation_period'],
-                    UsageType::from($data['usage_type']),
+                    UsageType::from($data['usage_type'])->value,
                 );
 
                 Notification::make()

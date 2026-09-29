@@ -334,10 +334,8 @@ class CkpnCollectiveResultIndex extends Component
             // Pass pdMethod eksplisit agar job tidak perlu query ulang — Ref: PRD Bab 12.3
             dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
-                $usageType->value,
                 $periode,
-                $this->resolvePdMethod($usageType),
-                $officeCode,
+                $usageType->value,
             ),
         )['dispatched'];
 
@@ -388,10 +386,8 @@ class CkpnCollectiveResultIndex extends Component
             userId: auth()->id(),
             dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
-                $usageType->value,
                 $periode,
-                $this->resolvePdMethod($usageType),
-                $officeCode,
+                $usageType->value,
             ),
             forceRerun: true,
         );
@@ -576,11 +572,8 @@ class CkpnCollectiveResultIndex extends Component
             userId: auth()->id(),
             dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
-                $usageType->value,
                 $periode,
-                $pdMethodOverride,
-                $officeCode,
-                $akadCode,
+                $usageType->value,
             ),
         )['dispatched'];
 

@@ -32,7 +32,7 @@ final class CkpnCollectiveCalculationJob implements ShouldQueue
     public function __construct(
         private int $calculationRunLogId,
         private string $calculationPeriod,
-        private UsageType $usageType,
+        private int $usageType,
         private array $segmentDimensions = [],
     ) {
         $this->onQueue('default');
@@ -41,6 +41,7 @@ final class CkpnCollectiveCalculationJob implements ShouldQueue
     public function handle(): void
     {
         $runLog = CalculationRunLog::findOrFail($this->calculationRunLogId);
+        $usageTypeEnum = UsageType::from($this->usageType);
 
         // Idempotency: skip if already Completed or Approved
         if ($runLog->status === RunStatus::Completed || $runLog->status === RunStatus::Approved) {
@@ -55,7 +56,7 @@ final class CkpnCollectiveCalculationJob implements ShouldQueue
             // Branch: dynamic vs legacy
             if (!empty($this->segmentDimensions)) {
                 $result = $calculator->calculateDynamic(
-                    $this->usageType,
+                    $usageTypeEnum,
                     $this->calculationPeriod,
                     $this->segmentDimensions,
                 );
@@ -66,13 +67,13 @@ final class CkpnCollectiveCalculationJob implements ShouldQueue
             } else {
                 // Legacy: single all-account calculation
                 $result = $calculator->calculate(
-                    $this->usageType,
+                    $usageTypeEnum,
                     $this->calculationPeriod,
                 );
 
                 $this->writeSegmentResult($runLog, [
                     'segment' => [
-                        'usage_type' => $this->usageType->value,
+                        'usage_type' => $usageTypeEnum->value,
                         'calculation_period' => $this->calculationPeriod,
                     ],
                     'results' => $result['results'],

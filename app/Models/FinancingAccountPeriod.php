@@ -30,6 +30,8 @@ class FinancingAccountPeriod extends Model
         'financing_status',
         'writeoff_status',
         'upload_batch_id',
+        'office_code',
+        'akad_code',
         'origination_date',
         'maturity_date',
     ];
