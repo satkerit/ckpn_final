@@ -206,13 +206,13 @@ class PdNetflowResultIndex extends Component
 
         $userId = auth()->id();
 
-        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        // Dispatch per (jenis penggunaan × target kantor × target akad) — Ref: PRD Bab 5 (segmentasi level 1 & 2)
         $result = DB::transaction(fn (): array => CalculationDispatchService::dispatchPerSegment(
             runType: RunType::PdNetflow,
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
         ));
 
         if ($result['dispatched'] === 0) {
@@ -267,13 +267,13 @@ class PdNetflowResultIndex extends Component
 
         $userId = auth()->id();
 
-        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor)
+        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor × target akad)
         $result = CalculationDispatchService::dispatchPerSegment(
             runType: RunType::PdNetflow,
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
             forceRerun: true,
         );
 
@@ -407,6 +407,8 @@ class PdNetflowResultIndex extends Component
             $detail = (new PdNetflowDetailService)->calculate(
                 $this->filterPeriode,
                 $this->filterUsageType,
+                null,
+                null,
             );
             $pdRates = PdNetflowResult::query()
                 ->where('calculation_period', $this->filterPeriode)

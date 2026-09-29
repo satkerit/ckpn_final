@@ -27,6 +27,7 @@ class PdNetflowResult extends Model
         'calculation_run_log_id',
         'usage_type',
         'office_code',
+        'akad_code',
         'from_bucket_id',
         'calculation_period',
         'pd_rate',

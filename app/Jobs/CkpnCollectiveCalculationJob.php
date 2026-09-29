@@ -66,6 +66,8 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
         private readonly string $pdMethod = 'netflow',
         /** NULL = semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
         private readonly ?string $officeCode = null,
+        /** NULL = semua akad; 'xx' = pecahan per kode akad (level 2 segmentasi) */
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -98,14 +100,22 @@ class CkpnCollectiveCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Resolve PD method dari setting; konstruktor dipakai sebagai fallback jika setting kosong.
-            $setting = CalculationGeneralSetting::value('ckpn_collective_pd_method');
-            $pdMethod = $setting !== '' ? $setting : $this->pdMethod;
+            // Resolve PD method dari calculation_data_ranges dengan prioritas segmen 3-level
+            // (office+usage+akad) > (usage+akad) > (usage) > global; fallback ke setting global (Ref: PRD Bab 5 & 15)
+            $pdMethodResolved = CalculationDataRange::resolveValue(
+                CalculationMethodKey::CkpnCollective,
+                'ckpn_collective_pd_method',
+                officeCode: $this->officeCode,
+                usageType: (int) $this->usageType,
+                akadCode: $this->akadCode,
+                default: null,
+            );
+            $pdMethod = $pdMethodResolved !== null ? $pdMethodResolved : $this->pdMethod;
 
             $calculator = new CkpnCollectiveCalculator((string) $pdMethod);
             $writer = new SnapshotWriter;
 
-            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode);
+            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $this->usageType);

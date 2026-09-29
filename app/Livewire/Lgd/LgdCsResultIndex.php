@@ -185,7 +185,7 @@ class LgdCsResultIndex extends Component
         $userId = auth()->id();
         $dispatched = 0;
 
-        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1).
+        // Dispatch per (jenis penggunaan × target kantor × target akad) — Ref: PRD Bab 5 (segmentasi level 1 & 2).
         // Target yang sudah Completed/Approved/Pending/Processing otomatis dilewati;
         // gunakan Rekalkulasi untuk menghitung ulang seluruh target.
         $dispatched = CalculationDispatchService::dispatchPerSegment(
@@ -193,7 +193,7 @@ class LgdCsResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_LGD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
@@ -257,13 +257,13 @@ class LgdCsResultIndex extends Component
 
         $userId = auth()->id();
 
-        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor)
+        // Re-run: selalu buat run log baru per (jenis penggunaan × target kantor × target akad)
         $dispatched = CalculationDispatchService::dispatchPerSegment(
             runType: RunType::LgdCs,
             akadKey: AkadEligibilityService::KEY_LGD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
             forceRerun: true,
         )['dispatched'];
 

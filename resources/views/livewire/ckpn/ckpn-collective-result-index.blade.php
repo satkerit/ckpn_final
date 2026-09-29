@@ -121,7 +121,7 @@
         {{-- Guard: tampilkan peringatan jika PD/LGD belum tersedia --}}
         @if($runPeriode !== '' && ! $pdLgdAvailable)
             <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
-                <p class="text-xs font-semibold text-amber-800 mb-1">Data PD dan/atau LGD belum tersedia untuk periode ini:</p>
+                <p class="text-xs font-semibold text-amber-800 mb-1">Data PD dan/atau LGD Final belum tersedia untuk periode ini:</p>
                 <ul class="space-y-0.5">
                     @foreach($pdLgdMissing as $item)
                         <li class="text-xs text-amber-700">• {{ $item }}</li>

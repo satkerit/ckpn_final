@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Livewire\Reporting;
 
+use App\Enums\AnomalySeverity;
 use App\Enums\AnomalyType;
 use App\Enums\UsageType;
 use App\Models\DataQualityAnomaly;
@@ -13,7 +14,7 @@ use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
 
-/** Ref: PRD Bab 7.3, FR-4.3 */
+/** Ref: PRD Bab 7.3, FR-4.3; Phase 3 Frontend — Severity-based filtering */
 #[Layout('layouts.app', ['title' => 'Anomali Data Quality'])]
 class DataQualityAnomalyIndex extends Component
 {
@@ -26,10 +27,9 @@ class DataQualityAnomalyIndex extends Component
 
     public string $filterAnomalyType = '';
 
-    public string $filterResolved = '';  // '' | '0' | '1'
+    public string $filterSeverity = '';  // '' | 'critical' | 'warning' | 'info'
 
-    /** ID anomali yang menunggu konfirmasi resolve */
-    public ?int $confirmingResolveId = null;
+    public string $filterStatus = '';  // '' | 'pending' | 'resolved'
 
     /** Reset halaman saat filter berubah */
     public function updatingSearch(): void
@@ -47,42 +47,22 @@ class DataQualityAnomalyIndex extends Component
         $this->resetPage();
     }
 
-    public function updatingFilterResolved(): void
+    public function updatingFilterSeverity(): void
     {
         $this->resetPage();
     }
 
-    /** Tampilkan dialog konfirmasi sebelum resolve anomali. */
-    public function confirmMarkResolved(int $id): void
+    public function updatingFilterStatus(): void
     {
-        $this->confirmingResolveId = $id;
-    }
-
-    /** Tandai satu anomali sebagai resolved. Ref: PRD FR-4.3 */
-    public function markResolved(int $id): void
-    {
-        $this->confirmingResolveId = null;
-        $anomaly = DataQualityAnomaly::findOrFail($id);
-        $this->authorize('update', $anomaly);
-
-        if ($anomaly->is_resolved) {
-            return;
-        }
-
-        $anomaly->update([
-            'is_resolved' => true,
-            'resolved_by_user_id' => auth()->id(),
-            'resolved_at' => now(),
-        ]);
-
-        $this->dispatch('notify', type: 'success', message: 'Anomali berhasil ditandai sebagai resolved.');
+        $this->resetPage();
     }
 
     public function render(): View
     {
         $query = DataQualityAnomaly::query()
-            ->with(['bucket', 'resolvedBy'])
-            ->orderByRaw('is_resolved ASC')
+            ->with(['bucket', 'reviewedBy'])
+            ->orderByRaw('CASE WHEN severity = "critical" THEN 0 WHEN severity = "warning" THEN 1 ELSE 2 END ASC')
+            ->orderByRaw('CASE WHEN status = "pending" THEN 0 WHEN status = "resolved" THEN 1 ELSE 2 END ASC')
             ->orderByDesc('created_at');
 
         if ($this->filterPeriod !== '') {
@@ -91,8 +71,11 @@ class DataQualityAnomalyIndex extends Component
         if ($this->filterAnomalyType !== '') {
             $query->where('anomaly_type', $this->filterAnomalyType);
         }
-        if ($this->filterResolved !== '') {
-            $query->where('is_resolved', (bool) $this->filterResolved);
+        if ($this->filterSeverity !== '') {
+            $query->where('severity', $this->filterSeverity);
+        }
+        if ($this->filterStatus !== '') {
+            $query->where('status', $this->filterStatus);
         }
 
         $query->when($this->search, fn ($q) => $q->where(
@@ -106,6 +89,7 @@ class DataQualityAnomalyIndex extends Component
 
         $anomalyTypes = AnomalyType::cases();
         $usageTypes = UsageType::cases();
+        $severities = AnomalySeverity::cases();
 
         $periods = DataQualityAnomaly::query()
             ->select('period')
@@ -117,6 +101,7 @@ class DataQualityAnomalyIndex extends Component
             'records',
             'anomalyTypes',
             'usageTypes',
+            'severities',
             'periods'
         ));
     }

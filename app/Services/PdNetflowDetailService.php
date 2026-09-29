@@ -39,20 +39,24 @@ final class PdNetflowDetailService
      *
      * Parameter key : 'pd_netflow_rolling_window_months'
      * Default       : 36 bulan (3 tahun)
-     * Scope priority: segment-specific ($usageType != null) > all-account (null)
+     * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
      * Window ini menentukan berapa bulan ke belakang data outstanding diambil dari
      * financing_account_periods untuk menghitung transition rate dan compound rate.
      *
-     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan window, minimum 1
      */
-    private function windowMonths(?string $usageType): int
+    private function windowMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
     {
         $value = CalculationDataRange::resolveValue(
             CalculationMethodKey::PdNetflow,
             'pd_netflow_rolling_window_months',
+            officeCode: $officeCode,
             usageType: $usageType !== null ? (int) $usageType : null,
+            akadCode: $akadCode,
             default: 36,
         );
 
@@ -64,20 +68,21 @@ final class PdNetflowDetailService
      *
      * Parameter key : 'pd_netflow_forward_projection_months'
      * Default       : 12 bulan (1 tahun ke depan dari calculationPeriod)
-     * Scope priority: segmen paling spesifik > global
+     * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * Proyeksi menghitung transition rate ke depan untuk periode yang belum ada datanya,
-     * menggunakan rata-rata lookback dari periode historis yang sudah ada.
-     *
-     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan proyeksi ke depan
      */
-    private function forwardMonths(?string $usageType): int
+    private function forwardMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
     {
         $value = CalculationDataRange::resolveValue(
             CalculationMethodKey::PdNetflow,
             'pd_netflow_forward_projection_months',
+            officeCode: $officeCode,
             usageType: $usageType !== null ? (int) $usageType : null,
+            akadCode: $akadCode,
             default: 12,
         );
 
@@ -90,19 +95,21 @@ final class PdNetflowDetailService
      * Parameter key : 'pd_netflow_projection_method'
      * Nilai valid   : 'rolling' | 'full'
      * Default       : 'rolling'
+     * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * 'rolling' = gunakan rata-rata lookbackMonths terakhir sebelum titik proyeksi
-     * 'full'    = gunakan rata-rata seluruh periode historis dalam window
-     *
-     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
      * @return string 'rolling' atau 'full'
      */
-    private function projectionMethod(?string $usageType): string
+    private function projectionMethod(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): string
     {
         $value = CalculationDataRange::resolveValue(
             CalculationMethodKey::PdNetflow,
             'pd_netflow_projection_method',
+            officeCode: $officeCode,
             usageType: $usageType !== null ? (int) $usageType : null,
+            akadCode: $akadCode,
             default: 'rolling',
         );
 
@@ -110,29 +117,29 @@ final class PdNetflowDetailService
     }
 
     /**
-     * Ambil jumlah bulan lookback untuk proyeksi rolling dari calculation_parameters.
+     * Ambil jumlah bulan lookback untuk proyeksi rolling dari calculation_data_ranges.
      *
      * Parameter key : 'pd_netflow_projection_lookback_months'
      * Default       : sama dengan windowMonths() jika parameter tidak diset
-     * Scope priority: segment-specific > all-account
+     * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * Lookback digunakan saat projectionMethod = 'rolling':
-     *   projected_rate[B][P] = avg(transition_rate[B][P-lookback..P-1]) — rata-rata N bulan terakhir
-     * Jika projectionMethod = 'full', lookback diabaikan (pakai seluruh window).
-     *
-     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan lookback
      */
-    private function projectionLookbackMonths(?string $usageType): int
+    private function projectionLookbackMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
     {
         $value = CalculationDataRange::resolveValue(
             CalculationMethodKey::PdNetflow,
             'pd_netflow_projection_lookback_months',
+            officeCode: $officeCode,
             usageType: $usageType !== null ? (int) $usageType : null,
+            akadCode: $akadCode,
             default: null,
         );
 
-        return $value !== null ? (int) $value : $this->windowMonths($usageType);
+        return $value !== null ? (int) $value : $this->windowMonths($usageType, $officeCode, $akadCode);
     }
 
     /**
@@ -186,12 +193,12 @@ final class PdNetflowDetailService
      *   debtors: Collection,                             ← raw akun per bucket untuk drill-down
      * }
      */
-    public function calculate(string $calculationPeriod, ?string $usageType = null): array
+    public function calculate(string $calculationPeriod, ?string $usageType = null, ?string $officeCode = null, ?string $akadCode = null): array
     {
-        $window = $this->windowMonths($usageType);
-        $forward = $this->forwardMonths($usageType);
-        $projectionMethod = $this->projectionMethod($usageType);
-        $lookbackMonths = $this->projectionLookbackMonths($usageType);
+        $window = $this->windowMonths($usageType, $officeCode, $akadCode);
+        $forward = $this->forwardMonths($usageType, $officeCode, $akadCode);
+        $projectionMethod = $this->projectionMethod($usageType, $officeCode, $akadCode);
+        $lookbackMonths = $this->projectionLookbackMonths($usageType, $officeCode, $akadCode);
 
         // Rentang periode outstanding: calcPeriod-window s/d calcPeriod
         $outstandingStart = PeriodHelper::shiftBack($calculationPeriod, $window);
@@ -225,6 +232,8 @@ final class PdNetflowDetailService
                 })
                 ->whereIn('fap.period', $outstandingPeriods)
                 ->when($usageType !== null, fn ($query) => $query->where('fa.usage_type', $usageType))
+                ->when($officeCode !== null, fn ($query) => $query->where('fa.office_code', $officeCode))
+                ->when($akadCode !== null, fn ($query) => $query->where('fa.akad_code', $akadCode))
         )
             ->select(
                 'fap.period',
@@ -251,6 +260,8 @@ final class PdNetflowDetailService
                         ->whereRaw('fap.tgkhari <= b.max_days_overdue');
                 })
                 ->when($usageType !== null, fn ($query) => $query->where('fa.usage_type', $usageType))
+                ->when($officeCode !== null, fn ($query) => $query->where('fa.office_code', $officeCode))
+                ->when($akadCode !== null, fn ($query) => $query->where('fa.akad_code', $akadCode))
                 ->whereIn('fap.period', $outstandingPeriods)
                 ->whereNull('b.id')
         )

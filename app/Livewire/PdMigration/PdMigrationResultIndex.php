@@ -195,7 +195,7 @@ class PdMigrationResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => PdMigrationCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdMigrationCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {

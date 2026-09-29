@@ -26,6 +26,7 @@ use App\Livewire\Kalkulasi\ProbabilitasDefaultIndex;
 use App\Livewire\MasterData\BucketIndex;
 use App\Livewire\MasterData\CollateralTypeIndex;
 use App\Livewire\MasterData\QualityGradeIndex;
+use App\Livewire\PdNetflow\PdNetflowDetailBreakdownIndex;
 use App\Livewire\PdNetflow\PdNetflowPivotIndex;
 use App\Livewire\Reporting\CkpnFinalReportIndex;
 use App\Livewire\Reporting\CkpnSummaryIndex;
@@ -126,6 +127,7 @@ Route::middleware('auth')->group(function (): void {
         Route::get('/kalkulasi/periode-klasifikasi', PeriodeKlasifikasiIndex::class)->name('kalkulasi.periode-klasifikasi.index');
         Route::get('/kalkulasi/pd', ProbabilitasDefaultIndex::class)->name('kalkulasi.pd.index');
         Route::get('/kalkulasi/pd/pivot', PdNetflowPivotIndex::class)->name('kalkulasi.pd.pivot');
+        Route::get('/kalkulasi/pd/detail-breakdown', PdNetflowDetailBreakdownIndex::class)->name('kalkulasi.pd.detail-breakdown');
         Route::get('/kalkulasi/lgd', LossGivenDefaultIndex::class)->name('kalkulasi.lgd.index');
         Route::get('/kalkulasi/ckpn', HasilCkpnIndex::class)->name('kalkulasi.ckpn.index');
         Route::get('/kalkulasi/ckpn/individual', CkpnIndividualResultIndex::class)->name('kalkulasi.ckpn.individual');

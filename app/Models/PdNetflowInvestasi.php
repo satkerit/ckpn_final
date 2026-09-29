@@ -28,6 +28,7 @@ class PdNetflowInvestasi extends Model
 
     protected $fillable = [
         'office_code',
+        'akad_code',
         'calculation_run_log_id',
         'from_bucket_id',
         'calculation_period',

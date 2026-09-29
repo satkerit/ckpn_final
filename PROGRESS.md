@@ -1,237 +1,137 @@
-## [2026-09-28] Segmentasi Level 1: Pecah Snapshot Hasil Perhitungan per Kode Kantor
+# Progress Implementasi Alur CKPN Multi-Level Segmentation
 
-- Status: Done
-- Modul: Seluruh engine kalkulasi (PD Netflow, PD Migration, LGD ER/CS/Final, CKPN Individual/Kolektif)
-- Ref PRD: Bab 5 (segmentasi bertingkat: kantor → jenis penggunaan → akad), 15
-- Perubahan:
-  - Kolom `office_code` (NULL = konsolidasi, 'xx' = kode kantor) ditambahkan ke seluruh tabel snapshot + `calculation_run_log` via 2 migration idempoten. Unique index lama tidak diubah karena tiap target memakai run log sendiri (menghindari error MySQL 1553).
-  - `OfficeSegmentResolver` (baru): daftar kantor berdata per periode + gate `calculation_segmentation_levels` (level office_code aktif) + `runTargets()`.
-  - `CalculationDispatchService` (baru): membuat run log + dispatch per (jenis penggunaan × target kantor) dengan pengecekan idempotensi per target; dipakai 7 halaman hasil (Netflow, Migration, LGD ER/CS/Final, CKPN Individual/Kolektif).
-  - `SnapshotWriter`: semua method `write*` menerima `officeCode` dan menuliskannya ke baris snapshot.
-  - Engine: kalkulator PD Netflow/Migration, LGD ER/CS, CKPN Individual/Kolektif menerima filter `officeCode`; LGD Final & CKPN Kolektif membaca pecahan kantor dengan **fallback ke konsolidasi** bila pecahan kantor belum ada.
-  - `HasOfficeSegmentScope` (trait global scope): query Eloquent snapshot default hanya membaca baris konsolidasi → tampilan/laporan lama tidak dobel baris; scope `officeCode('01')` untuk membaca pecahan kantor.
-  - `office_code` ditambahkan ke `$fillable` 16 model snapshot (mencegah mass-assignment diam-diam mengabaikan kolom).
-- Verifikasi: migration + full test suite 83 passed (248 assertions); smoke test periode 202309 — PD Netflow konsolidasi & kantor 01 completed dengan `office_code` terisi di result/movement/compound/segmented; LGD CS (624 akun konsolidasi, 83 akun kantor 02) & LGD Final per kantor completed.
-- File utama: `database/migrations/2026_09_28_230000_*`, `2026_09_28_231000_*`, `app/Domain/Ckpn/Services/{OfficeSegmentResolver,CalculationDispatchService}.php`, `app/Models/Concerns/HasOfficeSegmentScope.php`, `app/Domain/Ckpn/Services/SnapshotWriter.php`, 7 job + kalkulator engine, 7 Livewire halaman hasil.
-- Next / open item: (1) tabel `financing_outstanding_quarterly` belum punya dimensi kantor sehingga PD Migration per kantor dihitung langsung dari `financing_account_periods` (catat bila pipeline quarterly ditambah office_code); (2) filter/dropdown pemilih kantor di halaman hasil belum ditambahkan (data per kantor sudah tersimpan & bisa difilter via scope `officeCode`); (3) `PdNetflowDetailService`/pivot detail masih menampilkan konsolidasi.
+**Status Keseluruhan**: Audit selesai → Siap Phase 1 implementasi  
+**Tanggal Update**: 2026-09-29  
+**Ref Dokumen Utama**: [docs/AUDIT_ALUR_CKPN.md](docs/AUDIT_ALUR_CKPN.md)
 
-## [2026-09-28] Fix PD Netflow Failed: Skema Tabel Detail & Resolusi Parameter Segmen
+---
 
-- Status: Done
-- Modul: PD Netflow — snapshot detail, Parameter Kalkulasi, segmentasi per segmen
-- Ref PRD: Bab 7, 15
-- Perubahan:
-  - Root cause job PD Netflow status Failed: `SnapshotWriter::writePdNetflowDetail()` menulis kolom `usage_type`, tetapi tabel `pd_netflow_bucket_movement` & `pd_netflow_compound_rate` masih memakai `risk_segment_id` (sisa skema lama) → QueryException "Unknown column 'usage_type'". Diperbaiki via migration pengganti kolom + index non-unique (retry job tidak bentrok unique).
-  - Fix resolusi parameter per-segmen: `CalculationDataRange::resolveValue()` membandingkan enum `UsageType` (hasil cast kolom) dengan int argumen sehingga baris segmen spesifik TIDAK PERNAH cocok dan selalu jatuh ke global. Kini dinormalisasi ke int.
-  - Fix UniqueConstraintViolation `uq_column_config_method_pokpby` pada UI Parameter Kalkulasi: simpan konfigurasi kolom pakai `updateOrCreate` kunci (method, pokpby_code).
-  - Test `PdNetflowFeatureTest` dimigrasi dari model lama `CalculationParameter` (tabel sudah dihapus) ke `CalculationDataRange` + assert resolusi parameter per-segmen.
-  - Verifikasi segmentasi: semua job (Netflow, Migration, LGD ER/CS/Final, CKPN Individual/Kolektif) iterasi `UsageType::cases()`, filter akad dari `calculation_column_configs` (AkadEligibilityService) diterapkan konsisten di engine; parameter window/proyeksi diambil via `CalculationDataRange::resolveValue` dengan prioritas kantor > jenis penggunaan > akad > global. Kunci segmentasi kantor (`office_code`) belum dipakai sebagai pemecah snapshot hasil (hanya pemecah segmen penggunaan yang dipakai job) — dicatat sebagai open item PRD Bab 12.
-- File utama: `database/migrations/2026_09_28_220000_replace_risk_segment_with_usage_type_on_pd_netflow_details.php`, `app/Models/CalculationDataRange.php`, `app/Livewire/Ckpn/CalculationParameterIndex.php`, `tests/Feature/PdNetflowFeatureTest.php`
-- Verifikasi: migration sukses; full test suite 83 passed (248 assertions).
-- Next: konfirmasi user apakah hasil perhitungan perlu dipecah juga per kode kantor (level 1 segmentasi) atau cukup per jenis penggunaan/akad via parameter.
+## Timeline Implementasi
 
-## [2026-09-28] Fix TypeError: tgkmdl null pada Perhitungan CKPN Individual
+| Phase | Deskripsi | Status | Target | Progress |
+|-------|-----------|--------|--------|----------|
+| Pre-0 | Audit sistem saat ini | ✅ DONE | — | 100% |
+| **1** | Schema & Master Data | ⏳ PENDING | Week 1 | 0% |
+| **2** | Klasifikasi & Staging | ⏳ PENDING | Week 1–2 | 0% |
+| **3** | PD Netflow Fix (akad rules) | ⏳ PENDING | Week 2–3 | 0% |
+| **4** | UI & Calculation | ⏳ PENDING | Week 3–4 | 0% |
+| **5** | Test & Verify | ⏳ PENDING | Week 4–5 | 0% |
 
-- Status: Done
-- Modul: CKPN Individual / CKPN Kolektif — EAD resolution
-- Ref PRD: Bab 6.1, 11
-- Perubahan:
-  - `tgkmdl` dari query builder dikembalikan sebagai `string|null`; ketika NULL diteruskan ke `PokpbyCriteriaService::getEadValue()` yang bertipe `?float` sehingga memicu TypeError.
-  - Normalisasi nilai `tgkmdl` ke `?float` sebelum dipakai pada `CkpnIndividualCalculator` dan `CkpnCollectiveCalculator`.
-- File: `app/Domain/Ckpn/Individual/CkpnIndividualCalculator.php`, `app/Domain/Ckpn/Collective/CkpnCollectiveCalculator.php`
-- Verifikasi: `pint` PASS (2 files).
+---
 
-## [2026-09-28] UI Pengelolaan Parameter Kalkulasi Terstruktur (Tab 3) & Migration calculation_segmentation_values
+## Audit Summary (Pre-Phase 0)
 
-- Status: Done
-- Modul: Parameter Kalkulasi — Livewire `CalculationParameterIndex` & Schema
-- Ref PRD: Bab 5, 6.1, 7, 8, 9, 10, 15
-- Perubahan:
-  - Dibuat migration `2026_09_28_150000_create_calculation_segmentation_values_table.php` untuk tabel `calculation_segmentation_values` yang di-relasikan oleh model `CalculationSegmentationLevel`.
-  - Komponen Livewire baru + Blade view untuk mengelola tabel parameter terstruktur.
-  - Sub-tab CRUD: Kolom Tabel, Rentang Data PD/LGD, Segmentasi Bertingkat, Parameter Umum.
-- File: `database/migrations/2026_09_28_150000_create_calculation_segmentation_values_table.php`, `app/Livewire/Ckpn/CalculationParameterIndex.php`, `resources/views/livewire/ckpn/calculation-parameter-index.blade.php`
-- Verifikasi: `php artisan migrate` PASS; seeder PASS; `pint` PASS.
-- Next step: seed nilai rentang produksi bila open item PRD Bab 12 sudah dikonfirmasi.
+### ✅ Audit Selesai — 2026-09-29
 
-## [2026-09-28] Fix Komprehensif Progress Bar Tidak Bergerak / Tidak Muncul
+**Key Findings**:
+- Sistem saat ini hanya support filter `usage_type` → perlu tambah `office_code` + `akad_code`
+- Tabel `ckpn_period_classifications` belum punya kolom `office_code` + `akad_code`
+- PD Netflow query **hardcoded ke `outstanding_balance`** → belum support tunggakan pokok per akad
+- Bucket 14 WO logic sudah benar (per-periode, bukan >360 hari)
+- ClassifyPeriodDataJob belum populate segmentasi 3-level ke staging
 
-- Status: Done
-- Modul: Upload Data — Progress Tracking (session lock, cache init, interval, UI, API fallback)
-- Ref PRD: Bab 3
-- Perubahan (5 akar masalah):
-  1. **Session lock** (`SESSION_DRIVER=database`): request polling `/api/upload-progress/{id}` (middleware `auth`) mengantre di belakang request `wire.executeUpload()` yang memegang lock session → progress macet. Fix: `session()->save()` + `session_write_close()` sebelum proses berat di `UploadIndex::executeUpload()`.
-  2. `initializeProgress()` dipanggil SETELAH pre-scan `countTotalRows()` → cache progress belum ada saat polling awal → API 404 terus-menerus. Fix: init SEBELUM pre-scan + `setTotalSteps($totalRows)` (method baru di `HasProgressTracking`) setelah pre-scan.
-  3. Modulo tetap `% 250` / `% 500` tidak pernah true untuk file kecil → progress 0% sampai selesai. Fix: `$progressInterval = max(10, min(100, ceil($totalRows / 20)))` (properti baru) dipakai di 5 pipeline, plus `elseif` update progress untuk `financing_office` & `collateral_type` yang sebelumnya hanya update saat buffer flush.
-  4. Dialog SweetAlert2 tidak punya angka persen & elemen bisa null saat render async. Fix: tambah `#progress-percentage`, simpan `progressState` + `applyProgress()` + `didOpen` di `resources/js/app.js`, dan `npm run build`.
-  5. API 404 tanpa fallback saat cache miss. Fix: `UploadProgressController::buildProgressFromBatch()` menghitung persentase dari `processed_rows/total_rows` batch record.
-- File: `app/Traits/HasProgressTracking.php`, `app/Services/UploadProcessorService.php`, `app/Livewire/UploadData/UploadIndex.php`, `app/Http/Controllers/Api/UploadProgressController.php`, `resources/js/app.js`, `public/build/*`
-- Verifikasi: pint PASS (330 files); `php -l` bersih; `npm run build` sukses; `view:clear` OK.
+**Gap Count**: 10 items (3 HIGH PRIORITY, 7 MEDIUM–HIGH)
 
-## [2026-09-28] Fix Progress Bar — Persentase Tidak Bergerak
+**Full Audit Report**: [docs/AUDIT_ALUR_CKPN.md](docs/AUDIT_ALUR_CKPN.md)
 
-- Status: Done
-- Modul: Upload Data — UploadProcessorService + HasProgressTracking
-- Perubahan:
-  - Root cause: `initializeProgress((string) $batchId)` dipanggil tanpa `$totalRows`, sehingga `$this->totalSteps = 0` selamanya dan persentase selalu 0.
-  - Fix: di `process()`, scan cepat total baris via `countTotalRows()` (sudah ada di `StreamableExcelUpload`) sebelum `initializeProgress`. `initializeProgress((string) $batchId, $totalRows)` kini menerima total baris yang benar.
-  - Efek: `updateBatchProgress()` → `setProgress($processedRows)` → `percentage = processedRows/totalRows * 100` kini menghasilkan nilai yang akurat.
-- File: `app/Services/UploadProcessorService.php`
+---
 
-## [2026-09-28] Fix Upload Jaminan — Dedup Benar & Fallback Noreg
+## Phase-by-Phase Status
 
-- Status: Done
-- Modul: Upload Data — processCollateral
-- Perubahan:
-  - Tambah in-memory dedup dengan kunci `(financing_account_id|collateral_code|sequence_number)` — satu akun **boleh** punya banyak jaminan dengan noreg yang sama asalkan no urut berbeda.
-  - Perbaiki fallback `collateral_code` kosong: dari `JMN-{account_number}` (selalu sama per akun) menjadi `JMN-{account_number}-{sequence_number}` agar setiap jaminan tetap unik.
-  - Tambah alias heading `noreg` untuk kolom `collateral_code`.
-  - `duplicateRows` dilaporkan di `error_summary` dan `progress_log.skipped_duplicates`.
-- File: `app/Services/UploadProcessorService.php`
+### Phase 1: Schema & Master Data (0% → target 100%)
 
-## [2026-09-28] Fix Fungsi Lihat Detail Error Upload Batch
+**Tasks**:
+- [ ] Create migration: add `office_code`, `akad_code` ke `ckpn_period_classifications`
+- [ ] Create migration: create `akad_calculation_rules` table
+- [ ] Seed `akad_calculation_rules` dengan default config
+- [ ] Create `AkadCalculationRulesRepository` service
 
-- Status: Done
-- Modul: Upload Data — UploadBatchIndex (Riwayat Upload)
-- Ref PRD: Bab 3
-- Perubahan:
-  - **UploadProcessorService**: normalisasi format `error_summary` agar semua tipe upload menyimpan error sebagai `{row, field, error, value}` — sebelumnya `flushOfficeBuffer`, `flushCollateralTypeBuffer`, `processCollateralType`, dan `processCollateral` menyimpan string biasa yang tidak bisa dibaca modal Alpine.
-  - **upload-batch-index.blade.php**: hapus `x-data=""` nested di tombol gagal (reliable issue di Alpine v3), ganti `json_encode` ke `Js::from()` untuk HTML escaping yang benar.
-  - **Modal template**: tambah branch `x-if` untuk handle format string sebagai fallback (backward compat data lama di DB).
-- File utama: `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`
+**Milestone**: Schema siap, master data seeded  
+**Started**: —  
+**Completed**: —
 
-## [2026-09-28] Perbaikan Klik Detail Error pada Riwayat Upload
+---
 
-- Status: Done
-- Modul: Upload Data — Riwayat Upload (UploadBatchIndex)
-- Ref PRD: Bab 3, Bab 7.3
-- Perubahan:
-  - Mengubah modal detail error dari berbasis Alpine dispatch (`$dispatch('show-error-details')` + script JS inline) menjadi modal server-rendered Livewire murni (`$showErrorModal`, `$selectedBatchId`, `openErrorModal()`, `closeErrorModal()`). Hal ini mengatasi:
-    1. Race condition JS function pada navigasi `wire:navigate` (script tidak selalu dijalankan ulang).
-    2. Kerusakan escaping HTML saat batch memiliki ribuan entri error di atribut `@click`.
-  - Tombol klik detail error kini aktif tidak hanya saat `failed_rows > 0`, melainkan untuk seluruh batch yang memiliki `error_summary` atau berstatus `Failed` (ditambah tombol "Lihat detail" langsung pada badge status Gagal).
-  - Menambahkan method `hasErrorDetails()` pada model `FinancingUploadBatch`.
-  - Menambahkan CSS rule `[x-cloak] { display: none !important; }` pada `resources/css/app.css`.
-  - Memperbaiki bug kolom pencarian `file_name` -> `filename` pada query Livewire.
-- File utama: `app/Livewire/UploadData/UploadBatchIndex.php`, `resources/views/livewire/upload-data/upload-batch-index.blade.php`, `app/Models/FinancingUploadBatch.php`, `resources/css/app.css`
-- Verifikasi: pint PASS; test suite PASS; `php artisan view:cache` PASS.
+### Phase 2: Klasifikasi & Staging (0% → target 100%)
 
-## [2026-09-28] Perbaikan Detail Pesan Error Upload
+**Tasks**:
+- [ ] Update `ClassifyPeriodDataJob` untuk populate `office_code`, `akad_code`
+- [ ] Test ClassifyPeriodDataJob dengan data sample
+- [ ] Update `CkpnClassificationIndex` UI filter
 
-- Status: Done
-- Modul: Upload Data — Error Reporting
-- Ref PRD: Bab 3, Bab 7.3
-- Perubahan:
-  - `executeUpload()` kini menangkap pesan exception (`$e->getMessage()`) dan menampilkannya sebagai pesan utama, tidak lagi generik.
-  - Error per baris/kolom dari `error_summary` diformat & ditampilkan langsung di kartu upload (maks 5 baris + sisa "dan N error lainnya"), sebelumnya hanya menyuruh buka halaman Riwayat.
-  - `UploadProcessorService::markFailed()` menormalkan semua entri error ke struktur `{row, field, error}`; ditambah `normalizeError()` & `describeError()` (prefix "Baris N:" / "Kolom X:").
-  - Blok `createReader()`/`countTotalRows()` dipindah ke dalam try/catch — file rusak/tidak terbaca sekarang menandai batch `Failed` + pesan jelas, tidak lagi nyangkut `Processing`.
-- File utama: `app/Livewire/UploadData/UploadIndex.php`, `app/Services/UploadProcessorService.php`, `resources/views/livewire/upload-data/upload-index.blade.php`
-- Verifikasi: pint PASS; `php artisan test tests/Feature/UploadProcessorServiceTest.php` → 3 passed; GetDiagnostics bersih.
+**Milestone**: Klasifikasi support segmentasi 3-level  
+**Started**: —  
+**Completed**: —
 
-## [2026-09-28] Hapus Method down() pada Seluruh Migration
+---
 
-- Status: Done
-- Modul: Database Migrations (74 file)
-- Ref PRD: —
-- Perubahan: menghapus seluruh `public function down()` (beserta PHPDoc-nya) dari 74 file migration agar migrasi satu arah (rollback tidak digunakan); 1 import `Blueprint` orphan ikut dibersihkan.
-- File utama: `database/migrations/*.php`
-- Verifikasi: `pint database/migrations` PASS (74 files); `php artisan migrate:status` OK.
+### Phase 3: PD Netflow Fix (0% → target 100%)
 
-## [2026-09-28] Rebuild Fitur Upload Data — Tanpa Queue + Dialog Progress Bar
+**Tasks**:
+- [ ] Update `OutstandingMapLoader.load()` untuk dynamic field selection
+- [ ] Update `PdNetflowDetailService` query
+- [ ] Update `BucketMovementValidator`
+- [ ] Test PD Netflow per akad
 
-- Status: Done
-- Modul: Upload Data Pembiayaan (semua 5 tipe) — Logika, Service, UI
-- Ref PRD: Bab 3 (Upload Data), Bab 7.3 (data quality)
-- Perubahan:
-  - **Hapus arsitektur queue**: 5 job upload (`ProcessFinancingPeriodUploadJob`, `ProcessCollateralUploadJob`, `ProcessFinancingMasterUploadJob`, `ProcessFinancingOfficeUploadJob`, `ProcessCollateralTypeUploadJob`) + `UploadJobBase` dihapus. Hosting user tanpa terminal tidak bisa jalankan `queue:work`.
-  - **UploadProcessorService** (sinkron, streaming OpenSpout, chunk bulk `upsert`/`insert`): memori konstan, `set_time_limit(1800)` + `max_execution_time`/`memory_limit` override.
-  - **Dedup ketat histori pembiayaan**: 2 lapis — in-memory `seenFileKeys` (duplikat dalam file) + cek DB existing per chunk. Nokontrak sama pada periode sama dilewati & dilaporkan di `error_summary`/`progress_log.skipped_duplicates`.
-  - **Pola dua tahap tanpa queue**: `processUpload()` (cepat: validasi + simpan file + buat batch + dispatch event `start-upload-progress`) → JS buka dialog progress, polling `/api/upload-progress/{batchId}`, lalu panggil `executeUpload($batchId)` tanpa await (background HTTP request) → UI tetap responsif.
-  - **Keamanan**: path file dibaca server-side dari kolom baru `financing_upload_batches.file_path` (bukan dari client) + `abort_unless` ownership check. Route progress API turun dari `auth:sanctum` ke `auth` (polling pakai session cookie web).
-  - **Dialog progress bar** (SweetAlert2 `window.showUploadProgress`/`updateProgress`) via Alpine listener `start-upload-progress.window` & `upload-finished.window` di `upload-index.blade.php`.
-  - **LOKASI FILE**: `LOAD DATA LOCAL INFILE` dihapus (config tidak punya `PDO::MYSQL_ATTR_LOCAL_INFILE`) — diganti bulk `upsert`/`insert` per chunk.
-- File utama: `app/Services/UploadProcessorService.php`, `app/Livewire/UploadData/UploadIndex.php`, `app/Traits/HasProgressTracking.php`, `resources/views/livewire/upload-data/upload-index.blade.php`, `app/Models/FinancingUploadBatch.php`, `database/migrations/2026_09_28_070048_add_file_path_to_financing_upload_batches_table.php`, `routes/web.php`, `database/factories/UserFactory.php`, `tests/Feature/UploadProcessorServiceTest.php`
-- Verifikasi: `./vendor/bin/pint` PASS; `php artisan test tests/Feature/UploadProcessorServiceTest.php` → **3 passed (13 assertions)** (collateral upsert, idempotency, dedup histori nokontrak+periode).
-- Catatan: `UserFactory::$password` static dihapus — cache hash lintas-test memicu `Could not verify the hashed value's configuration` (order-dependent).
-- Next / risiko: satu request sinkron panjang bisa kena timeout shared hosting pada file sangat besar; pertimbangkan chunked resume bila muncul di produksi.
+**Milestone**: PD Netflow support outstanding + tunggakan pokok per akad  
+**Started**: —  
+**Completed**: —
 
-## [2026-09-27] Fase Perbaikan Hasil Audit Kode
+---
 
-- Status: Done
-- Modul: Lintas Modul — Upload, Security, Dead Code, Snapshot Immutability
-- Ref PRD: Bab 3, 10, 13.2 (FR-13), 16
-- Perubahan:
-  - **Bug kritis OpenSpout**: `StreamableExcelUpload` mengakses property private `Row::$cells` (fatal error) → diganti `Row::getCells()` di `extractHeadings()` & `streamRows()`.
-  - **Deadlock/retry**: `retry_after` queue DB (1860s) dipastikan > `$timeout` job maksimum (1800s) agar job tidak di-retry sebelum selesai.
-  - **Redundansi progress**: hapus panggilan `initializeProgress()` ganda di `ProcessFinancingPeriodUploadJob` & `ProcessFinancingMasterUploadJob` (sudah dipanggil `UploadJobBase::handle()`).
-  - **Snapshot immutability**: `LgdCsResultIndex::rekalkulasi()` hanya menghapus snapshot hasil, log run lama dipertahankan sebagai history (konsisten `LgdFinalResultIndex`).
-  - **Dead code dibersihkan**: `resources/js/upload-manager.js`, `resources/views/components/upload-progress-modal.blade.php`, `resources/views/test-dialogs.blade.php`, route dev `/test-dialogs`, `resources/views/welcome.blade.php`, `storage/dbg.log`. Referensi Vite input & import `app.js` ikut dibersihkan.
-  - **Test suite** disinkronkan dengan schema & DTO terbaru (kolom `cs_total_shortfall`, konstruktor `CkpnIndividualCalculator`, otorisasi `actingAsSuperAdmin()`, dispatch async job upload).
-  - Audit findings terdokumentasi di `docs/CODE_AUDIT.md`.
-- File utama: `app/Traits/StreamableExcelUpload.php`, `app/Jobs/ProcessFinancingPeriodUploadJob.php`, `app/Jobs/ProcessFinancingMasterUploadJob.php`, `app/Livewire/Lgd/LgdCsResultIndex.php`, `routes/web.php`, `vite.config.js`, `resources/js/app.js`, `docs/CODE_AUDIT.md`
-- Verifikasi: `./vendor/bin/pint` (4 file) + `php artisan test` → **82 passed (243 assertions)**, 0 failed; `npm run build` sukses.
-- Next: tidak ada blocker.
+### Phase 4: UI & Calculation (0% → target 100%)
 
-## [2026-09-27] Implementasi OpenSpout untuk Upload Excel Hemat Memori
+**Tasks**:
+- [ ] Update `PdNetflowPivotIndex` filter UI
+- [ ] Update `PdNetflowResultIndex` filter UI
+- [ ] Update `PdNetflowCalculationJob` dispatcher
+- [ ] Update PD Migration UI
+- [ ] Update CKPN Individual/Collective UI
 
-- Status: Done
-- Modul: Upload Data — Semua Job Upload (Period, Collateral, Master, Office, CollateralType)
-- Ref PRD: Bab 3 — Upload Data Pembiayaan
-- Perubahan:
-  - Install package OpenSpout v5.12.0 via Composer untuk streaming read Excel (.xlsx) tanpa load seluruh file ke memori.
-  - Buat trait `StreamableExcelUpload` dengan method reusable: `createReader()`, `extractHeadings()`, `streamRows()`, `closeReader()`, `resolveColIndex()`, `parseDate()`, `parseDecimal()`, `parseInt()`, `parseString()`.
-  - Refactor seluruh job upload ke OpenSpout streaming:
-    - `ProcessFinancingPeriodUploadJob` — streaming + LOAD DATA LOCAL INFILE untuk insert super cepat (20-100x lebih cepat dari INSERT批量).
-    - `ProcessCollateralUploadJob` — streaming + bulk upsert.
-    - `ProcessFinancingMasterUploadJob` — streaming + bulk upsert.
-    - `ProcessFinancingOfficeUploadJob` — streaming + bulk upsert.
-    - `ProcessCollateralTypeUploadJob` — streaming + bulk upsert.
-  - Ubah `UploadProcessorService` dari `dispatchSync()` ke `dispatch()` untuk queue async (tidak blocking HTTP request).
-- Keuntungan:
-  - Memory konstan ~30-50MB berapapun ukuran file (sebelumnya bisa 512MB+ untuk file besar).
-  - Dapat memproses file ratusan ribu baris tanpa memory limit exceeded.
-  - Performa baca 2-5x lebih cepat dari PhpSpreadsheet.
-- File utama:
-  - `app/Traits/StreamableExcelUpload.php`
-  - `app/Jobs/ProcessFinancingPeriodUploadJob.php`
-  - `app/Jobs/ProcessCollateralUploadJob.php`
-  - `app/Jobs/ProcessFinancingMasterUploadJob.php`
-  - `app/Jobs/ProcessFinancingOfficeUploadJob.php`
-  - `app/Jobs/ProcessCollateralTypeUploadJob.php`
-  - `app/Services/UploadProcessorService.php`
-- Catatan penting:
-  - Pastikan queue worker berjalan: `php artisan queue:work --queue=ckpn-calculation`
-  - Import class lama (`FinancingMasterUploadImport`, dll.) masih ada tapi tidak dipakai — dapat dihapus jika tidak dibutuhkan.
-- Next: tidak ada blocker.
+**Milestone**: Semua UI support filter 3-level  
+**Started**: —  
+**Completed**: —
 
-## [2026-09-27] Tambah Kolom PPKA ke financing_account_periods
+---
 
-- Status: Done
-- Modul: Data Pembiayaan — Historis Periode (`FinancingAccountPeriod`)
-- Ref PRD: Bab 15
-- Perubahan:
-  - Migration: `add_ppka_to_financing_account_periods` (`DECIMAL(20,2) nullable`) — sudah dijalankan.
-  - Model: kolom `ppka` sudah ada di `$fillable` & cast `decimal:2`.
-  - Job: `ProcessFinancingPeriodUploadJob` — baca kolom `ppka` dari Excel (header `ppka`), simpan ke buffer & `LOAD DATA INFILE`.
-  - Template Excel upload: `FinancingPeriodDataSheet` — tambah kolom `ppka` di heading & contoh data; `FinancingPeriodPetunjukSheet` — tambah baris petunjuk `ppka`.
-  - Export: `FinancingPeriodExport` — tambah kolom `PPKA (Rp)` di query select, headings & map.
-  - View: `financing-period-index.blade.php` — tambah kolom PPKA di tabel, colspan empty-state 10→11.
-- File utama: `database/migrations/2026_09_27_152619_add_ppka_to_financing_account_periods.php`, `app/Models/FinancingAccountPeriod.php`, `app/Jobs/ProcessFinancingPeriodUploadJob.php`, `app/Exports/FinancingPeriodDataSheet.php`, `app/Exports/FinancingPeriodPetunjukSheet.php`, `app/Exports/FinancingPeriodExport.php`, `resources/views/livewire/data-pembiayaan/financing-period-index.blade.php`
-- Next: tidak ada blocker.
+### Phase 5: Test & Verify (0% → target 100%)
 
-## [2026-09-15] Perbaikan Spacing & Kontras View PD/LGD
+**Tasks**:
+- [ ] End-to-end test (klasifikasi → PD → CKPN)
+- [ ] Verify akad rules selection
+- [ ] Verify bucket 14 WO logic
+- [ ] Performance test dataset besar
+- [ ] Update PROGRESS.md
 
-- Status: Done
-- Modul: UI/UX — seluruh view PD (Netflow, Migration, Pivot) & LGD (ER, CS, Final) + tab container
-- Ref PRD: Bab 7–11 (tampilan hasil)
-- Perubahan:
-  - Standarisasi spacing: header `mb-6` + sub-teks `mt-1`, panel kontrol `p-5` dengan `gap-4`, judul panel `mb-4`, label field `mb-1 text-zinc-400`.
-  - Samakan warna label field (sebagian `text-zinc-300` → `text-zinc-400`) dan border panel `zinc-700` → `zinc-800` agar konsisten.
-  - Kontras WCAG 2.1 AA: badge status (Completed/Failed/Processing/Approved) pakai `border + bg-*-950/40 + text-*-300`; angka LGD/shortfall `text-red-700` → `text-rose-400`; recovery `text-emerald-700` → `text-emerald-400`; header Migration Matrix `bg-blue-700` → `bg-blue-950/60`.
-  - Backdrop modal PD Netflow & Pivot disamakan ke `bg-black/60 backdrop-blur-sm`; tombol hapus modal `bg-rose-600`.
-  - Input pencarian hasil PD Netflow diselaraskan ke `bg-zinc-950 + placeholder-zinc-500`.
-  - Container tab PD/LGD: nav `flex-wrap gap-x-2 gap-y-1` agar tab tidak overflow/menempel di layar sempit.
-- File utama: `resources/views/livewire/kalkulasi/{probabilitas-default-index,loss-given-default-index}.blade.php`, `resources/views/livewire/pd-netflow/*`, `resources/views/livewire/pd-migration/*`, `resources/views/livewire/lgd/*`, `resources/views/livewire/reporting/lgd-summary-index.blade.php`
-- Verifikasi: `php artisan view:clear && php artisan view:cache` (semua Blade terkompilasi, exit 0).
-- Next: tidak ada blocker.
+**Milestone**: Sistem production-ready  
+**Started**: —  
+**Completed**: —
+
+---
+
+## Known Issues
+
+| ID | Issue | Impact | Status | Solution |
+|----|-------|--------|--------|----------|
+| I-1 | Segmentasi hanya `usage_type` | Blocker | ⏳ PENDING | Phase 1–2 |
+| I-2 | Outstanding hardcoded | Blocker | ⏳ PENDING | Phase 3 |
+| I-3 | UI filter minimal | Medium | ⏳ PENDING | Phase 4 |
+
+---
+
+## Questions for User
+
+1. **Akad Rules**: Akad mana yg pakai `tgkmdl`? Default = `outstanding_balance`?
+2. **Dispatch Strategy**: 1 job per (period, usage, office, akad) atau 1 job per (period, usage) + loop?
+3. **Segment Priority**: Jika data kosong → skip, warning, atau fallback ke level sebelumnya?
+
+---
+
+## Next Step
+
+👉 **Lanjut ke Phase 1**: Schema & Master Data  
+Tunggu user confirm 3 questions di atas sebelum start implementasi.
+
+---
+
+*Dokumen ini di-update otomatis setiap phase selesai. Lihat [docs/AUDIT_ALUR_CKPN.md](docs/AUDIT_ALUR_CKPN.md) untuk detail lengkap.*

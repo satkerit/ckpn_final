@@ -88,6 +88,8 @@ class PdNetflowPivotExportJob implements ShouldQueue
                 $datasets[$title] = (new PdNetflowDetailService)->calculate(
                     $this->calculationPeriod,
                     $usageType,
+                    null,
+                    null,
                 );
             }
 

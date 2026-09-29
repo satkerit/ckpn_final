@@ -19,6 +19,7 @@ use App\Models\PdNetflowBucketMovement;
 use App\Models\PdNetflowCalculationHistory;
 use App\Models\PdNetflowCompoundRate;
 use App\Models\PdNetflowConsolidated;
+use App\Models\PdNetflowDetailBreakdown;
 use App\Models\PdNetflowInvestasi;
 use App\Models\PdNetflowKonsumsi;
 use App\Models\PdNetflowModalKerja;
@@ -67,15 +68,17 @@ final class SnapshotWriter
         string $dataEnd,
         int $windowMonths,
         array $pdRates,
+        ?array $pdRatesPerAkad = null,
         ?string $notes = null,
         ?string $officeCode = null,
     ): void {
+        // Simpan aggregate PD rate per bucket (level 1 segmentasi)
         foreach ($pdRates as $bucketId => $pdRate) {
             PdNetflowResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
-                // office_code NULL = konsolidasi lintas kantor; 'xxx' = hasil per kantor (level 1)
                 'office_code' => $officeCode,
+                'akad_code' => null,  // aggregate semua akad
                 'from_bucket_id' => $bucketId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,
@@ -84,6 +87,29 @@ final class SnapshotWriter
                 'window_months' => $windowMonths,
                 'notes' => $notes,
             ]);
+        }
+
+        // Simpan breakdown PD rate per akad (level 2 segmentasi) — Ref: PRD Bab 5
+        if ($pdRatesPerAkad !== null && ! empty($pdRatesPerAkad)) {
+            foreach ($pdRatesPerAkad as $offCode => $byAkad) {
+                foreach ($byAkad as $akadCode => $rates) {
+                    foreach ($rates as $bucketId => $pdRate) {
+                        PdNetflowResult::create([
+                            'calculation_run_log_id' => $runLog->id,
+                            'usage_type' => $usageType->value,
+                            'office_code' => $offCode !== 'all' ? $offCode : null,
+                            'akad_code' => $akadCode !== 'all' ? $akadCode : null,
+                            'from_bucket_id' => $bucketId,
+                            'calculation_period' => $calculationPeriod,
+                            'pd_rate' => $pdRate,
+                            'data_period_start' => $dataStart,
+                            'data_period_end' => $dataEnd,
+                            'window_months' => $windowMonths,
+                            'notes' => $notes,
+                        ]);
+                    }
+                }
+            }
         }
     }
 
@@ -124,6 +150,7 @@ final class SnapshotWriter
         string $rateStart,
         string $compoundEnd,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         $projPeriodSet = array_flip($projPeriods);
 
@@ -136,6 +163,7 @@ final class SnapshotWriter
                     'calculation_run_log_id' => $runLog->id,
                     'usage_type' => $usageType->value,
                     'office_code' => $officeCode,
+                    'akad_code' => $akadCode,
                     'from_bucket_id' => $bucketId,
                     'period' => $period,
                     'transition_rate' => min(1.0, max(0.0, (float) $rate)),
@@ -153,6 +181,7 @@ final class SnapshotWriter
                     'calculation_run_log_id' => $runLog->id,
                     'usage_type' => $usageType->value,
                     'office_code' => $officeCode,
+                    'akad_code' => $akadCode,
                     'from_bucket_id' => $bucketId,
                     'start_period' => $startPeriod,
                     'compound_rate' => $rate,
@@ -162,17 +191,19 @@ final class SnapshotWriter
     }
 
     /**
-     * Simpan raw history rows yang dipakai dalam kalkulasi PD Netflow ke tabel audit.
+     * Simpan metadata ringkas input kalkulasi PD Netflow (jumlah baris source +
+     * periode yang dipakai) ke tabel audit — bukan baris mentah, agar tidak
+     * membebani memori/JSON saat dataset besar.
      * Ref: PRD Bab 7
      *
-     * Digunakan sebagai rekam jejak data outstanding per bucket per periode yang menjadi
-     * input aktual kalkulasi. Disimpan sebagai satu record JSON (history_data) per
-     * calculationPeriod + usageType + runLog — bukan baris per periode/bucket.
+     * Rekam jejak sumber data per kalkulasi. Disimpan sebagai satu record JSON
+     * (history_data) per calculationPeriod + usageType + runLog.
      *
-     * Berguna untuk reproduksi ulang kalkulasi tanpa mengubah data staging yang mungkin
-     * sudah berubah di kemudian hari.
+     * Berguna untuk audit; data pivot lengkap tersedia di tabel hasil
+     * pd_netflow_details (SnapshotWriter::writePdNetflowDetail()).
      *
-     * @param  array<int, array<string, mixed>>  $history  Snapshot data input kalkulasi
+     * @param  array{row_count: int, periods: string[]}  $history  Snapshot ringkas input kalkulasi
+     *                                                             (jumlah baris source + periode yang dipakai)
      */
     public function writePdNetflowHistory(
         CalculationRunLog $runLog,
@@ -180,12 +211,14 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $history,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         PdNetflowCalculationHistory::create([
             'calculation_run_log_id' => $runLog->id,
             'calculation_period' => $calculationPeriod,
             'usage_type' => $usageType->value,
             'office_code' => $officeCode,
+            'akad_code' => $akadCode,
             'history_data' => $history,
         ]);
     }
@@ -222,11 +255,13 @@ final class SnapshotWriter
         bool $isAllAccount,
         ?string $notes = null,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         LgdExpectedRecoveriesResult::create([
             'calculation_run_log_id' => $runLog->id,
             'usage_type' => $usageType?->value,
             'office_code' => $officeCode,
+            'akad_code' => $akadCode,
             'calculation_period' => $calculationPeriod,
             'data_period_start' => $dataStart,
             'data_period_end' => $dataEnd,
@@ -268,6 +303,7 @@ final class SnapshotWriter
         array $accountResults,
         ?string $notes = null,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         foreach ($accountResults as $result) {
             LgdCollateralShortfallResult::create([
@@ -275,6 +311,7 @@ final class SnapshotWriter
                 'financing_account_id' => $result['financing_account_id'],
                 'usage_type' => $usageType?->value,
                 'office_code' => $officeCode,
+                'akad_code' => $akadCode,
                 'calculation_period' => $calculationPeriod,
                 'outstanding_balance' => $result['outstanding_balance'],
                 'collateral_net_value' => $result['collateral_net_value'],
@@ -311,11 +348,13 @@ final class SnapshotWriter
         array $aggregate,
         ?string $notes = null,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         LgdCollateralShortfallBySegmentResult::create([
             'calculation_run_log_id' => $runLog->id,
             'usage_type' => $usageType->value,
             'office_code' => $officeCode,
+            'akad_code' => $akadCode,
             'calculation_period' => $calculationPeriod,
             'account_count' => $aggregate['account_count'],
             'total_outstanding' => $aggregate['total_outstanding'],
@@ -525,12 +564,14 @@ final class SnapshotWriter
         array $pdRates,
         ?string $notes = null,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         foreach ($pdRates as $qualityGradeId => $pdRate) {
             PdMigrationResult::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
                 'office_code' => $officeCode,
+                'akad_code' => $akadCode,
                 'from_quality_grade_id' => $qualityGradeId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,
@@ -557,12 +598,14 @@ final class SnapshotWriter
         string $calculationPeriod,
         array $rows,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         foreach ($rows as $row) {
             PdMigrationMatrix::create([
                 'calculation_run_log_id' => $runLog->id,
                 'usage_type' => $usageType->value,
                 'office_code' => $officeCode,
+                'akad_code' => $akadCode,
                 'from_quality_grade_id' => $row['from_quality_grade_id'],
                 'to_quality_grade_id' => $row['to_quality_grade_id'],
                 'cohort_period' => $row['cohort_period'],
@@ -601,6 +644,7 @@ final class SnapshotWriter
         array $sourceOs,
         array $destOs,
         ?string $officeCode = null,
+        ?string $akadCode = null,
     ): void {
         // Tentukan model tabel per-segmen berdasarkan UsageType
         $segmentModel = match ($usageType) {
@@ -613,6 +657,7 @@ final class SnapshotWriter
             $row = [
                 'calculation_run_log_id' => $runLog->id,
                 'office_code' => $officeCode,
+                'akad_code' => $akadCode,
                 'from_bucket_id' => $bucketId,
                 'calculation_period' => $calculationPeriod,
                 'pd_rate' => $pdRate,
@@ -630,6 +675,58 @@ final class SnapshotWriter
 
             // Simpan ke tabel konsolidasi (semua segmen masuk)
             PdNetflowConsolidated::create($row);
+        }
+    }
+
+    /**
+     * Simpan detail breakdown PD Netflow per lokasi + akad + jenis penggunaan.
+     *
+     * Ref: PRD Bab 7, Phase 3+ — Detailed pivot display requirement
+     * Data source: financing_account_periods dengan agregasi per office_code + akad_code + bucket + periode.
+     *
+     * Parameter:
+     * - $detailData: array[office_code][akad_code][bucket_id][period] = {outstanding, transition_rate, compound_rate}
+     *                atau null = skip (backward compat jika detail tidak tersedia)
+     */
+    public function writePdNetflowDetailBreakdown(
+        CalculationRunLog $runLog,
+        UsageType $usageType,
+        ?array $detailData = null,
+    ): void {
+        if ($detailData === null || empty($detailData)) {
+            return;
+        }
+
+        $batchSize = 1000;
+        $batch = [];
+
+        foreach ($detailData as $officeCode => $byAkad) {
+            foreach ($byAkad as $akadCode => $byBucket) {
+                foreach ($byBucket as $bucketId => $byPeriod) {
+                    foreach ($byPeriod as $period => $values) {
+                        $batch[] = [
+                            'calculation_run_log_id' => $runLog->id,
+                            'usage_type' => $usageType->value,
+                            'office_code' => $officeCode !== 'all' ? $officeCode : null,
+                            'akad_code' => $akadCode !== 'all' ? $akadCode : null,
+                            'from_bucket_id' => $bucketId,
+                            'period' => $period,
+                            'outstanding_balance' => (float) ($values['outstanding'] ?? 0.0),
+                            'transition_rate' => isset($values['transition_rate']) ? (float) $values['transition_rate'] : null,
+                            'compound_rate' => isset($values['compound_rate']) ? (float) $values['compound_rate'] : null,
+                        ];
+
+                        if (count($batch) >= $batchSize) {
+                            PdNetflowDetailBreakdown::insert($batch);
+                            $batch = [];
+                        }
+                    }
+                }
+            }
+        }
+
+        if (! empty($batch)) {
+            PdNetflowDetailBreakdown::insert($batch);
         }
     }
 }

@@ -69,6 +69,8 @@ class CkpnIndividualCalculationJob implements ShouldQueue
         private readonly string $calculationPeriod,
         /** NULL = semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
         private readonly ?string $officeCode = null,
+        /** NULL = semua akad; 'xx' = pecahan per kode akad (level 2 segmentasi) */
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -100,13 +102,21 @@ class CkpnIndividualCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil parameter dari calculation_general_settings — Ref: AGENTS.md §9
-            $sellingCostRate = CalculationGeneralSetting::floatValue('ckpn_individual_selling_cost_rate', 0.05);
+            // Ambil parameter dari calculation_data_ranges dengan prioritas segmen 3-level
+            // (office+usage+akad) > (usage+akad) > (usage) > global (Ref: PRD Bab 5 & 15, AGENTS.md §9)
+            $sellingCostRate = (float) CalculationDataRange::resolveValue(
+                CalculationMethodKey::CkpnIndividual,
+                'ckpn_individual_selling_cost_rate',
+                officeCode: $this->officeCode,
+                usageType: (int) $this->usageType,
+                akadCode: $this->akadCode,
+                default: 0.05,
+            );
 
             $calculator = new CkpnIndividualCalculator(sellingCostRate: $sellingCostRate);
             $writer = new SnapshotWriter;
 
-            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode);
+            $results = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $this->usageType);

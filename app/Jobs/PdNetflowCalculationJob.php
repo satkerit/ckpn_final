@@ -10,11 +10,13 @@ use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\RollingWindowResolver;
 use App\Domain\Ckpn\Services\SnapshotWriter;
+use App\Enums\AnomalySeverity;
 use App\Enums\CalculationMethodKey;
 use App\Enums\RunStatus;
 use App\Enums\UsageType;
 use App\Models\CalculationDataRange;
 use App\Models\CalculationRunLog;
+use App\Models\DataQualityAnomaly;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -57,6 +59,8 @@ class PdNetflowCalculationJob implements ShouldQueue
         private readonly string $calculationPeriod,
         /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
         private readonly ?string $officeCode = null,
+        /** NULL = konsolidasi semua akad; 'xx' = pecahan per kode akad (level 3 segmentasi) */
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -93,18 +97,23 @@ class PdNetflowCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil window parameter dari calculation_data_ranges (Ref: AGENTS.md §9 — jangan hardcode)
+            // Ambil window parameter dari calculation_data_ranges dengan prioritas segmen 3-level
+            // (office+usage+akad) > (usage+akad) > (usage) > global (Ref: PRD Bab 5 & 15, AGENTS.md §9)
             $windowMonths = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::PdNetflow,
                 'pd_netflow_rolling_window_months',
+                officeCode: $this->officeCode,
                 usageType: (int) $this->usageType,
+                akadCode: $this->akadCode,
                 default: 36,
             );
 
             $forwardMonths = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::PdNetflow,
                 'pd_netflow_forward_projection_months',
+                officeCode: $this->officeCode,
                 usageType: (int) $this->usageType,
+                akadCode: $this->akadCode,
                 default: 6,
             );
 
@@ -113,7 +122,7 @@ class PdNetflowCalculationJob implements ShouldQueue
             $calculator = new PdNetflowCalculator($resolver, $validator);
             $writer = new SnapshotWriter;
 
-            $result = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode);
+            $result = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
             $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $this->usageType);
@@ -132,7 +141,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 $resolver->rateStartPeriod($this->calculationPeriod),
                 $this->calculationPeriod,
                 $result['compound_end'],
-                count($result['history']),
+                $result['history']['row_count'],
             );
 
             $writer->writePdNetflowResult(
@@ -140,11 +149,13 @@ class PdNetflowCalculationJob implements ShouldQueue
                 usageType: $usageType,
                 calculationPeriod: $this->calculationPeriod,
                 dataStart: $resolver->rateStartPeriod($this->calculationPeriod),
-                dataEnd: $this->calculationPeriod, // periode penilaian = akhir data, bukan akhir rantai compound
+                dataEnd: $this->calculationPeriod,
                 windowMonths: $windowMonths,
                 pdRates: $result['pd_rates'],
+                pdRatesPerAkad: $result['pd_rates_per_akad'] ?? null,
                 notes: $notes,
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             $writer->writePdNetflowDetail(
@@ -158,6 +169,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 rateStart: $result['rate_start'],
                 compoundEnd: $result['compound_end'],
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             $writer->writePdNetflowHistory(
@@ -166,6 +178,7 @@ class PdNetflowCalculationJob implements ShouldQueue
                 calculationPeriod: $this->calculationPeriod,
                 history: $result['history'],
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             // Simpan ke 4 tabel tersegmentasi (Konsolidasi + segmen spesifik) — Ref: PRD Bab 7
@@ -201,9 +214,24 @@ class PdNetflowCalculationJob implements ShouldQueue
                 sourceOs: $sourceOs,
                 destOs: $destOs,
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
-            $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            // Simpan detail breakdown per lokasi + akad untuk pivot display — Ref: Phase 3+ user request
+            $writer->writePdNetflowDetailBreakdown(
+                runLog: $runLog,
+                usageType: $usageType,
+                detailData: $result['detail_breakdown'] ?? null,
+            );
+
+            // Check data quality — if critical anomalies exist, mark as CompletedWithWarning
+            $criticalCount = DataQualityAnomaly::where('period', $this->calculationPeriod)
+                ->where('usage_type', $this->usageType)
+                ->where('severity', AnomalySeverity::Critical->value)
+                ->count();
+
+            $finalStatus = $criticalCount > 0 ? RunStatus::CompletedWithWarning : RunStatus::Completed;
+            $runLog->update(['status' => $finalStatus, 'completed_at' => now()]);
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,

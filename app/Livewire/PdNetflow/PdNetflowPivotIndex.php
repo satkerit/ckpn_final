@@ -186,6 +186,8 @@ class PdNetflowPivotIndex extends Component
         $result = $service->calculate(
             $this->filterPeriode,
             $this->filterUsageType === 'all' ? null : $this->filterUsageType,
+            null,
+            null,
         );
 
         $this->outstandingPeriods = $result['outstanding_periods'];

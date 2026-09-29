@@ -11,6 +11,7 @@ use App\Jobs\ClassifyPeriodDataJob;
 use App\Jobs\PopulatePeriodDebtorsJob;
 use App\Models\CkpnPeriod;
 use App\Models\CkpnPeriodClassification;
+use App\Models\FinancingOffice;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
@@ -23,6 +24,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 /**
  * Tabel read-only klasifikasi pembiayaan per periode CKPN.
  * Ref: PRD Bab 6.1, 12a Step 3
+ * Support segmentasi 3-level: kantor (office_code), akad (akad_code), usage type
  */
 #[Layout('layouts.app', ['title' => 'Klasifikasi Pembiayaan CKPN'])]
 class CkpnClassificationIndex extends Component
@@ -34,6 +36,12 @@ class CkpnClassificationIndex extends Component
 
     #[Url(as: 'usage_type')]
     public string $filterUsageType = '';
+
+    #[Url(as: 'office_code')]
+    public string $filterOfficeCode = '';
+
+    #[Url(as: 'akad_code')]
+    public string $filterAkadCode = '';
 
     #[Url(as: 'classification')]
     public string $filterClassification = '';
@@ -208,6 +216,8 @@ class CkpnClassificationIndex extends Component
                 ->with(['financingAccount', 'ckpnPeriod'])
                 ->when($this->filterPeriode !== '', fn ($q) => $q->where('period', $this->filterPeriode))
                 ->when($this->filterUsageType !== '', fn ($q) => $q->where('usage_type', (int) $this->filterUsageType))
+                ->when($this->filterOfficeCode !== '', fn ($q) => $q->where('office_code', $this->filterOfficeCode))
+                ->when($this->filterAkadCode !== '', fn ($q) => $q->where('akad_code', $this->filterAkadCode))
                 ->when($this->filterClassification !== '', fn ($q) => $q->where('classification', $this->filterClassification))
                 ->when($this->search, fn ($q) => $q->where(
                     fn ($w) => $w
@@ -222,11 +232,15 @@ class CkpnClassificationIndex extends Component
         $periods = CkpnPeriod::select('period')->orderByDesc('period')->pluck('period')->unique();
         $usageTypes = UsageType::cases();
         $classificationTypes = ClassificationType::cases();
+        $offices = FinancingOffice::select('office_code', 'office_name')->orderBy('office_code')->get();
+        $akadCodes = CkpnPeriodClassification::select('akad_code')->distinct()->whereNotNull('akad_code')->pluck('akad_code')->sort()->values();
 
         $totalOutstanding = $this->showTable
             ? CkpnPeriodClassification::query()
                 ->when($this->filterPeriode !== '', fn ($q) => $q->where('period', $this->filterPeriode))
                 ->when($this->filterUsageType !== '', fn ($q) => $q->where('usage_type', (int) $this->filterUsageType))
+                ->when($this->filterOfficeCode !== '', fn ($q) => $q->where('office_code', $this->filterOfficeCode))
+                ->when($this->filterAkadCode !== '', fn ($q) => $q->where('akad_code', $this->filterAkadCode))
                 ->when($this->filterClassification !== '', fn ($q) => $q->where('classification', $this->filterClassification))
                 ->sum('outstanding_balance')
             : 0.0;
@@ -235,6 +249,8 @@ class CkpnClassificationIndex extends Component
             'classifications' => $classifications,
             'periods' => $periods,
             'usageTypes' => $usageTypes,
+            'offices' => $offices,
+            'akadCodes' => $akadCodes,
             'classificationTypes' => $classificationTypes,
             'totalOutstanding' => $totalOutstanding,
             'periodClassified' => $periodClassified,

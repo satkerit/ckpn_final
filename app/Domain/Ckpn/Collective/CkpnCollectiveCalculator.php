@@ -44,6 +44,7 @@ final class CkpnCollectiveCalculator
      * Kriteria akun yang diproses:
      *   - Masuk klasifikasi Collective di tabel ckpn_period_classifications untuk periode ini
      *   - Segmen (usage_type) sesuai parameter
+     *   - Kode akad masuk daftar eligible (parameter `ckpn_eligible_akad_codes`); jika parameter kosong, semua akad eligible
      *   - Memenuhi kriteria POKPBY jika termasuk dalam daftar khusus (parameter `pokpby_special_criteria_list`)
      *     Contoh: POKPBY=10 harus sudah jatuh tempo.
      *   - Snapshot LGD Final harus sudah tersedia (lihat LgdFinalCalculator)
@@ -62,6 +63,7 @@ final class CkpnCollectiveCalculator
      *
      * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
      * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
+     * @param  string|null  $akadCode    Kode akad (level 2 segmentasi); NULL = semua akad eligible — Ref: PRD Bab 5
      * @return array<int, array{
      *   financing_account_id: int,
      *   usage_type: string,
@@ -77,16 +79,18 @@ final class CkpnCollectiveCalculator
      *   office_code: string|null,
      * }>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // FIX: Ambil data langsung dari ckpn_period_classifications agar konsisten dengan rekonsiliasi
         // Sumber data harus SAMA dengan yang digunakan saat klasifikasi — Ref: PRD Bab 11
         $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
             ->where('classification', ClassificationType::Collective->value)
-            ->whereHas('financingAccount', function ($q) use ($usageType, $officeCode) {
+            ->whereHas('financingAccount', function ($q) use ($usageType, $officeCode, $akadCode) {
                 $q->where('usage_type', $usageType->value)
                     // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
-                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode));
+                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
+                    // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
+                    ->when($akadCode !== null, fn ($w) => $w->where('akad_code', $akadCode));
             })
             ->with('financingAccount')
             ->get();
@@ -97,10 +101,10 @@ final class CkpnCollectiveCalculator
 
         // Resolve PD rates untuk segmen (per bucket/kualitas, diambil dari snapshot terbaru).
         // Kantor spesifik → pakai PD pecahan kantor tsb, fallback konsolidasi jika belum ada.
-        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod, $officeCode);
+        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod, $officeCode, $akadCode);
 
         // Resolve LGD Final rate dari snapshot lgd_final_result (gabungan ER + CS) per segmen
-        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod, $officeCode);
+        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod, $officeCode, $akadCode);
         $lgdMethod = 'lgd_final';
 
         $results = [];
@@ -171,19 +175,22 @@ final class CkpnCollectiveCalculator
      * ke PD rate yang paling relevan via selectPdRate().
      *
      * @param  string  $calculationPeriod  Format yyyymm
+     * @param  string|null  $officeCode    Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
+     * @param  string|null  $akadCode      Kode akad (level 2 segmentasi); NULL = semua akad — Ref: PRD Bab 5
      * @return array<int, float> key = bucket_id (netflow) atau quality_grade_id (migration), value = pd_rate
      */
-    private function resolvePdRates(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    private function resolvePdRates(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         if ($this->pdMethod === 'netflow') {
-            // Pecahan kantor (melepas global scope konsolidasi)
+            // Pecahan kantor & akad (melepas global scope konsolidasi)
             $rows = PdNetflowResult::officeCode($officeCode)
+                ->akadCode($akadCode)
                 ->where('usage_type', $usageType->value)
                 ->where('calculation_period', $calculationPeriod)
                 ->pluck('pd_rate', 'from_bucket_id');
 
-            // Fallback konsolidasi (office_code NULL) untuk kantor yang belum punya pecahan
-            if ($rows->isEmpty() && $officeCode !== null) {
+            // Fallback konsolidasi (office_code & akad_code NULL) untuk kantor/akad yang belum punya pecahan
+            if ($rows->isEmpty() && ($officeCode !== null || $akadCode !== null)) {
                 $rows = PdNetflowResult::where('usage_type', $usageType->value)
                     ->where('calculation_period', $calculationPeriod)
                     ->pluck('pd_rate', 'from_bucket_id');
@@ -194,11 +201,12 @@ final class CkpnCollectiveCalculator
 
         // migration
         $rows = PdMigrationResult::officeCode($officeCode)
+            ->akadCode($akadCode)
             ->where('usage_type', $usageType->value)
             ->where('calculation_period', $calculationPeriod)
             ->pluck('pd_rate', 'from_quality_grade_id');
 
-        if ($rows->isEmpty() && $officeCode !== null) {
+        if ($rows->isEmpty() && ($officeCode !== null || $akadCode !== null)) {
             $rows = PdMigrationResult::where('usage_type', $usageType->value)
                 ->where('calculation_period', $calculationPeriod)
                 ->pluck('pd_rate', 'from_quality_grade_id');
@@ -217,20 +225,23 @@ final class CkpnCollectiveCalculator
      * Prasyarat: job CalculateLgdFinal harus sudah selesai untuk periode ini.
      *
      * @param  string  $calculationPeriod  Format yyyymm
+     * @param  string|null  $officeCode    Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
+     * @param  string|null  $akadCode      Kode akad (level 2 segmentasi); NULL = semua akad — Ref: PRD Bab 5
      * @return float LGD Final rate (0.0–1.0)
      *
      * @throws \RuntimeException jika snapshot tidak ditemukan.
      */
-    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): float
+    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): float
     {
-        // Pecahan kantor (melepas global scope konsolidasi)
+        // Pecahan kantor & akad (melepas global scope konsolidasi)
         $rate = LgdFinalResult::officeCode($officeCode)
+            ->akadCode($akadCode)
             ->where('usage_type', $usageType->value)
             ->where('calculation_period', $calculationPeriod)
             ->value('lgd_final_rate');
 
-        // Fallback konsolidasi (office_code NULL) untuk kantor yang belum punya pecahan
-        if ($rate === null && $officeCode !== null) {
+        // Fallback konsolidasi (office_code & akad_code NULL) untuk kantor/akad yang belum punya pecahan
+        if ($rate === null && ($officeCode !== null || $akadCode !== null)) {
             $rate = LgdFinalResult::where('usage_type', $usageType->value)
                 ->where('calculation_period', $calculationPeriod)
                 ->value('lgd_final_rate');

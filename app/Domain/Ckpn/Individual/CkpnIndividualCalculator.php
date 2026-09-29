@@ -55,6 +55,7 @@ final class CkpnIndividualCalculator
      * - $usageType          : segmen pembiayaan (enum UsageType).
      * - $calculationPeriod  : periode perhitungan format yyyymm.
      * - $officeCode         : kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5.
+     * - $akadCode           : kode akad (level 2 segmentasi); NULL = semua akad eligible — Ref: PRD Bab 5.
      *
      * Ref: PRD Bab 6.1
      *
@@ -72,10 +73,16 @@ final class CkpnIndividualCalculator
      *   office_code: string|null,
      * }>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter ckpn_eligible_akad_codes
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $usageType->value);
+
+        // Jika job dijalankan per akad spesifik (level 2 segmentasi), filter hanya akad tsb.
+        // Bila akadCode null → hitung konsolidasi semua akad eligible.
+        if ($akadCode !== null) {
+            $akadCodes = [$akadCode];
+        }
 
         // Ambil akun yang sudah diklasifikasi Individual dari staging — Ref: PRD Bab 6.1
         $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
@@ -84,6 +91,7 @@ final class CkpnIndividualCalculator
                 $q->where('usage_type', $usageType->value)
                     // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
                     ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
+                    // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
                     ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
             })
             // Akad 03 hanya jika sudah jatuh tempo pada periode perhitungan.

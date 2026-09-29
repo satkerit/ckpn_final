@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Pd\Netflow;
 
+use App\Enums\AnomalySeverity;
 use App\Enums\AnomalyType;
 use App\Enums\UsageType;
 use App\Models\Bucket;
 use App\Models\DataQualityAnomaly;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Validates bucket movement data quality before PD Netflow calculation.
@@ -20,40 +20,48 @@ final class BucketMovementValidator
     /**
      * Memvalidasi kualitas data bucket movement untuk seluruh segmen pada rentang periode yang diberikan.
      *
-     * Sumber data: financing_account_periods (via PdNetflowBaseline) — SAMA dengan sumber
-     * yang dipakai PdNetflowCalculator::loadOutstandingMap() agar populasi konsisten.
+     * Sumber data: financing_account_periods (via OutstandingMapLoader) — SAMA dengan sumber
+     * yang dipakai PdNetflowCalculator agar populasi konsisten.
      *
      * Jenis anomali yang dideteksi:
-     * 1. EmptyBucket   : outstanding salah satu bucket = 0 pada suatu periode (kemungkinan data tidak terupload).
+     * 1. EmptyBucket   : outstanding salah satu bucket = 0 pada suatu periode (severity: CRITICAL — blocks calculation).
      * 2. DestinationExceedsSource : outstanding bucket pada periode t melebihi outstanding bucket sebelumnya
-     *                              periode t-1 (unusual flow yang perlu dikonfirmasi; warning only).
-     *     * Kriteria input:
+     *                              periode t-1 (severity: WARNING — allows continue with log).
+     *
+     * Kriteria input:
      * - $usageType : segmen pembiayaan (enum UsageType).
      * - $periods   : list periode urut ascending format yyyymm.
-     * - $akadCodes : filter kode akad eligible (null = semua akad, harus konsisten dengan loadOutstandingMap).
+     * - $akadCodes : filter kode akad eligible (null = semua akad, harus konsisten dengan kalkulator).
      * - $officeCode: filter kode kantor level 1 (null = konsolidasi; harus konsisten dengan kalkulator).
      *
      * Return value:
-     * - true  = tidak ada blocking anomaly.
-     * - false = ada blocking anomaly.
+     * - true  = tidak ada critical anomaly.
+     * - false = ada critical anomaly (blocks calculation).
      *
-     * Ref: PRD Bab 7.3, FR-4.3
+     * Ref: PRD Bab 7.3, FR-4.3, Phase 3 Backend — Severity Categorization
      *
      * @param  string[]  $periods  Ordered list of periods to validate (e.g. ['202212','202301',...])
      * @param  string[]|null  $akadCodes  Filter akad eligible — HARUS sama dengan yang dipakai kalkulator
      * @param  string|null  $officeCode  Filter kantor — HARUS sama dengan yang dipakai kalkulator
+     * @param  array<string, array<int, float>>|null  $outstandingMap  Map agregat dari kalkulator
+     *                                                                 (null = aggregate ulang via loader)
      */
-    public function validate(UsageType $usageType, array $periods, ?array $akadCodes = null, ?string $officeCode = null): bool
-    {
-        $hasBlockingAnomaly = false;
+    public function validate(
+        UsageType $usageType,
+        array $periods,
+        ?array $akadCodes = null,
+        ?string $officeCode = null,
+        ?array $outstandingMap = null,
+    ): bool {
+        $hasCriticalAnomaly = false;
 
         // Load semua bucket untuk mapping tgkhari → bucket_id
         $buckets = Bucket::orderBy('bucket_order')->get();
 
-        // Bangun outstanding map per periode dari financing_account_periods (via PdNetflowBaseline)
-        // agar konsisten dengan loadOutstandingMap() di PdNetflowCalculator.
-        // Ref: AGENTS.md §4 — query builder untuk agregasi berat
-        $outstandingMap = $this->buildOutstandingMapFromSource($usageType, $periods, $akadCodes, $buckets, $officeCode);
+        // Outstanding map [period][bucket_id] = total_outstanding dari sumber yang sama
+        // dengan kalkulator. Diteruskan dari kalkulator agar tidak query ganda;
+        // jika null (pemakaian mandiri), di-aggregate ulang via OutstandingMapLoader.
+        $outstandingMap ??= OutstandingMapLoader::load($usageType->value, $periods, $akadCodes, $officeCode)['map'];
 
         foreach ($periods as $i => $period) {
             if ($i === 0) {
@@ -68,7 +76,7 @@ final class BucketMovementValidator
                 $currOutstanding = $currBuckets[$bucket->id] ?? 0.0;
                 $prevOutstanding = $prevBuckets[$bucket->id] ?? 0.0;
 
-                // Check 1: Bucket kosong (empty bucket) — warning only, tidak blocking
+                // Check 1: Bucket kosong (empty bucket) — CRITICAL, blocks calculation
                 if ($currOutstanding === 0.0) {
                     $this->flagAnomaly(
                         period: $period,
@@ -76,10 +84,12 @@ final class BucketMovementValidator
                         bucketId: $bucket->id,
                         type: AnomalyType::EmptyBucket,
                         description: "Outstanding bucket {$bucket->code} kosong pada periode {$period}.",
+                        severity: AnomalySeverity::Critical,
                     );
+                    $hasCriticalAnomaly = true;
                 }
 
-                // Check 2: Bucket tujuan > bucket asal (destination > source)
+                // Check 2: Bucket tujuan > bucket asal (destination > source) — WARNING only
                 // Bandingkan outstanding bucket ke-N periode t vs bucket ke-(N-1) periode t-1
                 $prevBucketId = $this->getPrevBucketId($buckets, $bucket->bucket_order);
                 if ($prevBucketId !== null) {
@@ -91,73 +101,14 @@ final class BucketMovementValidator
                             bucketId: $bucket->id,
                             type: AnomalyType::DestinationExceedsSource,
                             description: "Outstanding bucket {$bucket->code} periode {$period} ({$currOutstanding}) melebihi outstanding bucket sebelumnya periode {$prevPeriod} ({$prevBucketPrevPeriodOs}).",
+                            severity: AnomalySeverity::Warning,
                         );
-                        // Warning only — tidak auto-block (perlu review user — Ref: PRD Bab 7.3 FR-4.3)
                     }
                 }
             }
         }
 
-        return ! $hasBlockingAnomaly;
-    }
-
-    /**
-     * Bangun outstanding map [period][bucket_id] = total_outstanding dari financing_account_periods.
-     * Identik dengan loadOutstandingMap() di PdNetflowCalculator — sumber data yang sama
-     * memastikan validasi berjalan pada populasi yang konsisten dengan kalkulasi.
-     *
-     * @param  string[]  $periods
-     * @param  string[]|null  $akadCodes
-     * @return array<string, array<int, float>>
-     */
-    private function buildOutstandingMapFromSource(
-        UsageType $usageType,
-        array $periods,
-        ?array $akadCodes,
-        Collection $buckets,
-        ?string $officeCode = null,
-    ): array {
-        $rows = PdNetflowBaseline::apply(
-            DB::table('financing_account_periods as fap')
-                ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
-                ->where('fa.usage_type', $usageType->value)
-                ->whereIn('fap.period', $periods),
-            $akadCodes,
-            $officeCode,
-        )
-            ->select('fap.period', 'fap.tgkhari', 'fap.outstanding_balance')
-            ->get();
-
-        $map = [];
-        foreach ($rows as $row) {
-            $period = $row->period;
-            $tgkhari = (int) $row->tgkhari;
-            $outstanding = (float) $row->outstanding_balance;
-
-            $bucketId = $this->resolveBucketFromTgkhari($tgkhari, $buckets);
-
-            if (! isset($map[$period][$bucketId])) {
-                $map[$period][$bucketId] = 0.0;
-            }
-            $map[$period][$bucketId] += $outstanding;
-        }
-
-        return $map;
-    }
-
-    /**
-     * Resolve bucket_id dari tgkhari (hari tunggakan).
-     * Ref: PRD Bab 5
-     */
-    private function resolveBucketFromTgkhari(int $tgkhari, Collection $buckets): int
-    {
-        foreach ($buckets as $bucket) {
-            if ($tgkhari >= $bucket->min_days_overdue && $tgkhari <= $bucket->max_days_overdue) {
-                return $bucket->id;
-            }
-        }
-
-        return $buckets->last()->id;
+        return ! $hasCriticalAnomaly;
     }
 
     /**
@@ -185,6 +136,7 @@ final class BucketMovementValidator
         int $bucketId,
         AnomalyType $type,
         string $description,
+        AnomalySeverity $severity,
     ): void {
         DataQualityAnomaly::firstOrCreate(
             [
@@ -195,7 +147,8 @@ final class BucketMovementValidator
             ],
             [
                 'description' => $description,
-                'is_resolved' => false,
+                'severity' => $severity->value,
+                'status' => 'pending',
             ]
         );
     }

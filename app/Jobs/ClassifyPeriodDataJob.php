@@ -11,6 +11,7 @@ use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
 use App\Models\CkpnPeriodClassification;
+use App\Models\FinancingAccount;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -98,8 +99,11 @@ class ClassifyPeriodDataJob implements ShouldQueue
 
             $topN = CalculationGeneralSetting::intValue('ckpn_individual_top_n_outstanding', 10);
 
-            // Ambil semua data staging periode ini
-            $stagingData = CkpnPeriodClassification::where('period', $period)->get();
+            // Ambil semua data staging periode ini dengan relasi financingAccount
+            // untuk populate office_code dan akad_code
+            $stagingData = CkpnPeriodClassification::where('period', $period)
+                ->with('financingAccount')
+                ->get();
 
             // Tentukan top-N outstanding terbesar dari akun yang aktif, bukan writeoff, DAN NPL
             // Ref: PRD Bab 6.1 — Individual = aktif + bukan WO + NPL + masuk top-N outstanding
@@ -136,12 +140,18 @@ class ClassifyPeriodDataJob implements ShouldQueue
                     $collectiveCount++;
                 }
 
+                // Ambil office_code & akad_code dari financingAccount (fallback null)
+                $officeCode = $row->financingAccount?->office_code;
+                $akadCode = $row->financingAccount?->akad_code;
+
                 DB::table('ckpn_period_classifications')
                     ->where('id', $row->id)
                     ->update([
                         'classification' => $classification->value,
                         'is_classified' => true,
                         'classification_reason' => $reason,
+                        'office_code' => $officeCode,
+                        'akad_code' => $akadCode,
                     ]);
             }
 

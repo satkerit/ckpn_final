@@ -11,6 +11,11 @@
                     {{ $activeTab === 'migration' ? 'border-primary-500 text-primary-400 bg-primary-950/20 rounded-t-lg' : 'border-transparent text-zinc-400 hover:border-zinc-700 hover:text-zinc-200' }}">
                 PD Migration
             </button>
+            <button wire:click="$set('activeTab', 'detail-breakdown')"
+                class="border-b-2 px-5 py-3 text-sm font-semibold transition-all
+                    {{ $activeTab === 'detail-breakdown' ? 'border-primary-500 text-primary-400 bg-primary-950/20 rounded-t-lg' : 'border-transparent text-zinc-400 hover:border-zinc-700 hover:text-zinc-200' }}">
+                Detail Breakdown
+            </button>
         </nav>
     </div>
     <div>
@@ -19,6 +24,9 @@
         @endif
         @if($activeTab === 'migration')
             @livewire('pd-migration.pd-migration-result-index')
+        @endif
+        @if($activeTab === 'detail-breakdown')
+            @livewire('pd-netflow.pd-netflow-detail-breakdown-index')
         @endif
     </div>
 </div>

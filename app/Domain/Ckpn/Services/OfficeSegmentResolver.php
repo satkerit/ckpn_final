@@ -8,8 +8,6 @@ use App\Enums\SegmentType;
 use App\Models\CalculationSegmentationLevel;
 use App\Models\FinancingAccount;
 
-use function array_merge;
-
 /**
  * Resolver daftar kode kantor (level 1 segmentasi bertingkat).
  *
@@ -73,6 +71,47 @@ final class OfficeSegmentResolver
         $akadCodes = AkadEligibilityService::eligibleCodes($akadKey, $usageType);
 
         return array_merge([null], self::officeCodes($period, $akadCodes));
+    }
+
+    /**
+     * Hasilkan semua kombinasi target (officeCode × akadCode) untuk dispatch 3-dimensi.
+     *
+     * Struktur return: array of ['office' => string|null, 'akad' => string|null]
+     * null = konsolidasi (semua kantor / semua akad).
+     *
+     * Urutan kombinasi:
+     *   [null, null]                → konsolidasi total
+     *   [null, 'akad1'], ...        → konsolidasi per akad (jika level akad aktif)
+     *   ['ktr1', null], ...         → konsolidasi per kantor (jika level kantor aktif)
+     *   ['ktr1', 'akad1'], ...      → per kantor × per akad (jika kedua level aktif)
+     *
+     * @return array<int, array{office: string|null, akad: string|null}>
+     */
+    public static function runTargetsTriplet(string $akadKey, int $usageType, ?string $period): array
+    {
+        $officeLevelActive = self::officeLevelActive();
+        $akadLevelActive = AkadSegmentResolver::akadLevelActive();
+        $eligibleAkadCodes = AkadEligibilityService::eligibleCodes($akadKey, $usageType);
+
+        // Daftar office targets: [null] + tiap kantor jika aktif
+        $officeTargets = $officeLevelActive
+            ? array_merge([null], self::officeCodes($period, $eligibleAkadCodes))
+            : [null];
+
+        $triplets = [];
+
+        foreach ($officeTargets as $officeCode) {
+            // Daftar akad targets per kantor: [null] + tiap akad jika aktif
+            $akadTargets = $akadLevelActive
+                ? AkadSegmentResolver::runTargets($akadKey, $usageType, $period, $officeCode)
+                : [null];
+
+            foreach ($akadTargets as $akadCode) {
+                $triplets[] = ['office' => $officeCode, 'akad' => $akadCode];
+            }
+        }
+
+        return array_values($triplets);
     }
 
     /**

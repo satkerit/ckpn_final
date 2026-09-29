@@ -11,11 +11,12 @@ use App\Models\CalculationRunLog;
 
 /**
  * Service bersama untuk membuat CalculationRunLog + dispatch job perhitungan
- * per (jenis penggunaan × target kantor).
+ * per (jenis penggunaan × target kantor × target akad).
  *
  * DESAIN SEGMENTASI (Ref: PRD Bab 5):
- *   Setiap engine dihitung untuk setiap kombinasi (jenis penggunaan, target kantor),
- *   di mana target kantor = NULL (konsolidasi seluruh kantor) ATAU satu kode kantor.
+ *   Setiap engine dihitung untuk setiap kombinasi (jenis penggunaan, target kantor, target akad),
+ *   di mana target kantor = NULL (konsolidasi seluruh kantor) ATAU satu kode kantor,
+ *   dan target akad = NULL (konsolidasi seluruh akad) ATAU satu kode akad.
  *   Tiap target memakai run log SENDIRI agar status, retry, dan audit trail terpisah
  *   (Ref: AGENTS.md §4 — job idempotent, snapshot insert-only per run).
  *
@@ -25,14 +26,14 @@ use App\Models\CalculationRunLog;
  *       akadKey: AkadEligibilityService::KEY_PD_RATE,
  *       period: $periode,
  *       userId: auth()->id(),
- *       dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) =>
- *           PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+ *       dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) =>
+ *           PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
  *   );
  */
 final class CalculationDispatchService
 {
     /**
-     * Buat run log + dispatch untuk semua segmen (jenis penggunaan) × target kantor.
+     * Buat run log + dispatch untuk semua segmen (jenis penggunaan) × target kantor × target akad.
      *
      * Dua mode:
      * - $forceRerun = false → mode "jalankan": target yang sudah Completed/Approved/
@@ -40,7 +41,7 @@ final class CalculationDispatchService
      * - $forceRerun = true  → mode "rekalkulasi": selalu buat run log baru (riwayat lama
      *   tetap tersimpan), tanpa memblokir status lama.
      *
-     * @param  callable(CalculationRunLog, UsageType, string|null): void  $dispatcher
+     * @param  callable(CalculationRunLog, UsageType, string|null, string|null): void  $dispatcher
      * @return array{dispatched: int, skipped: int}
      */
     public static function dispatchPerSegment(
@@ -55,8 +56,12 @@ final class CalculationDispatchService
         $skipped = 0;
 
         foreach (UsageType::cases() as $usageType) {
-            foreach (OfficeSegmentResolver::runTargets($akadKey, $usageType->value, $period) as $officeCode) {
-                if (! $forceRerun && self::isBlocked($runType, $period, $usageType, $officeCode)) {
+            // Gunakan runTargetsTriplet untuk loop per officeCode × akadCode — Ref: PRD Bab 5
+            foreach (OfficeSegmentResolver::runTargetsTriplet($akadKey, $usageType->value, $period) as $target) {
+                $officeCode = $target['office'];
+                $akadCode = $target['akad'];
+
+                if (! $forceRerun && self::isBlocked($runType, $period, $usageType, $officeCode, $akadCode)) {
                     $skipped++;
 
                     continue;
@@ -67,11 +72,12 @@ final class CalculationDispatchService
                     'run_type' => $runType,
                     'usage_type' => $usageType,
                     'office_code' => $officeCode,
+                    'akad_code' => $akadCode,
                     'status' => RunStatus::Pending,
                     'triggered_by_user_id' => $userId,
                 ]);
 
-                $dispatcher($runLog, $usageType, $officeCode);
+                $dispatcher($runLog, $usageType, $officeCode, $akadCode);
                 $dispatched++;
             }
         }
@@ -83,7 +89,7 @@ final class CalculationDispatchService
      * True bila target tertentu sudah pernah/sedang dijalankan sehingga tidak boleh
      * di-dispatch ulang (Completed, Approved, Pending, atau Processing).
      */
-    private static function isBlocked(RunType $runType, string $period, UsageType $usageType, ?string $officeCode): bool
+    private static function isBlocked(RunType $runType, string $period, UsageType $usageType, ?string $officeCode, ?string $akadCode = null): bool
     {
         $query = CalculationRunLog::query()
             ->where('period', $period)
@@ -93,6 +99,10 @@ final class CalculationDispatchService
         $query = $officeCode === null
             ? $query->whereNull('office_code')
             : $query->where('office_code', $officeCode);
+
+        $query = $akadCode === null
+            ? $query->whereNull('akad_code')
+            : $query->where('akad_code', $akadCode);
 
         return $query->whereIn('status', [
             RunStatus::Completed->value,

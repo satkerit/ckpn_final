@@ -121,6 +121,8 @@ class PopulatePeriodDebtorsJob implements ShouldQueue
                     'financing_account_periods.financing_status',
                     'financing_account_periods.writeoff_status',
                     'financing_accounts.usage_type',
+                    'financing_accounts.office_code',
+                    'financing_accounts.akad_code',
                 ])
                 ->get();
 
@@ -138,6 +140,8 @@ class PopulatePeriodDebtorsJob implements ShouldQueue
                 'financing_status' => $account->financing_status?->value,
                 'writeoff_status' => $account->writeoff_status?->value,
                 'usage_type' => $account->usage_type,
+                'office_code' => $account->office_code,
+                'akad_code' => $account->akad_code,
                 'classification_reason' => null,
                 'ckpn_period_id' => $ckpnPeriod->id,
             ])->values()->toArray();

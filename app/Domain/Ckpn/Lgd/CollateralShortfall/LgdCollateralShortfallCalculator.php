@@ -93,7 +93,7 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
      * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5
      * @return array<int, array{financing_account_id: int, financing_code: string|null, outstanding_balance: float, collateral_net_value: float, shortfall: float, lgd_rate: float}>
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter lgd_rate_akad_codes
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_LGD_RATE, $usageType->value);
@@ -106,10 +106,12 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
                     ->where('collectibility', 5)
                     ->orWhere('writeoff_status', 'W')
             )
-            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode) {
+            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode, $akadCode) {
                 $q->where('usage_type', $usageType->value)
                     // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
                     ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
+                    // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
+                    ->when($akadCode !== null, fn ($w) => $w->where('akad_code', $akadCode))
                     ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
             })
             // Akad 03 hanya jika sudah jatuh tempo pada periode perhitungan

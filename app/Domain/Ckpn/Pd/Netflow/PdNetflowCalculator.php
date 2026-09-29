@@ -10,8 +10,6 @@ use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\RollingWindowResolver;
 use App\Enums\UsageType;
 use App\Models\Bucket;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Calculates PD using the Netflow method.
@@ -48,14 +46,20 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
      *   proj_periods: string[],
      *   rate_start: string,
      *   compound_end: string,
-     *   history: array<int, array<string, mixed>>,
+     *   history: array{row_count: int, periods: string[]},
      * }
      */
-    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter pd_rate_akad_codes
         // usageType->value diteruskan agar resolusi akad mempertimbangkan segmentasi yang dikonfigurasi.
-        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $usageType->value);
+        $eligibleAkadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $usageType->value);
+
+        // Jika job dijalankan per akad spesifik (level 3 segmentasi), filter hanya akad tsb.
+        // Bila akadCode null → hitung konsolidasi semua akad eligible (whitelist dari eligibleAkadCodes).
+        $akadCodes = ($akadCode !== null)
+            ? [$akadCode]
+            : $eligibleAkadCodes;
 
         // Resolve all period ranges from window
         $outstandingStart = $this->windowResolver->outstandingStartPeriod($calculationPeriod);
@@ -68,17 +72,24 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
         // All periods needed for outstanding data (outstandingStart to outstandingEnd)
         $outstandingPeriods = PeriodHelper::range($outstandingStart, $outstandingEnd);
 
-        // Step 1: Validate data quality (Ref: PRD Bab 7.3)
-        // Teruskan $akadCodes & $officeCode agar validator memeriksa populasi yang sama dengan kalkulator.
-        $this->validator->validate($usageType, $outstandingPeriods, $akadCodes, $officeCode);
+        // Step 1: Load & agregasi outstanding per bucket per periode dari financing_account_periods
+        // dengan filter akad/kantor yang sama. Agregasi dilakukan di SQL (OutstandingMapLoader)
+        // agar tidak memuat baris mentah ke memori — OOM di worker pada dataset besar.
+        $loaded = OutstandingMapLoader::load($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
+        $outstandingMap = $loaded['map'];
 
-        // Step 2: Load outstanding data dari financing_account_periods dengan filter akad/kantor yang sama.
-        // Ref: AGENTS.md §4 — query builder diizinkan untuk agregasi berat
-        $outstandingMap = $this->loadOutstandingMap($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
+        // Step 2: Validate data quality (Ref: PRD Bab 7.3) memakai outstanding map yang sama
+        $this->validator->validate($usageType, $outstandingPeriods, $akadCodes, $officeCode, $outstandingMap);
 
         // Step 3: Load all buckets (B1–B13 for transition, B14 is target/default)
         $buckets = Bucket::orderBy('bucket_order')->get();
         $sourceBuckets = $buckets->filter(fn (Bucket $b) => $b->bucket_order < 14); // B1–B13
+
+        // Peta order → id agar lookup bucket berikutnya O(1), bukan firstWhere() di loop.
+        $bucketIdByOrder = [];
+        foreach ($buckets as $b) {
+            $bucketIdByOrder[$b->bucket_order] = $b->id;
+        }
 
         // Step 4: Calculate transition rates for all actual periods (rateStart to calculationPeriod)
         $actualRateEnd = $calculationPeriod;
@@ -91,8 +102,8 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
             foreach ($actualPeriods as $period) {
                 $prevPeriod = PeriodHelper::shiftBack($period, 1);
                 $srcOut = $outstandingMap[$prevPeriod][$bucket->id] ?? 0.0;
-                $nextBucketId = $this->getNextBucketId($buckets, $bucket->bucket_order);
-                $dstOut = $nextBucketId ? ($outstandingMap[$period][$nextBucketId] ?? 0.0) : 0.0;
+                $nextBucketId = $bucketIdByOrder[$bucket->bucket_order + 1] ?? null;
+                $dstOut = $nextBucketId !== null ? ($outstandingMap[$period][$nextBucketId] ?? 0.0) : 0.0;
 
                 $transitionRates[$bucket->id][$period] = ($srcOut > 0)
                     ? min(1.0, $dstOut / $srcOut)
@@ -146,13 +157,13 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
                 $curOrder = $bucket->bucket_order;
 
                 while ($curOrder < 14) {
-                    $curBucket = $buckets->firstWhere('bucket_order', $curOrder);
-                    $nextBucketId = $this->getNextBucketId($buckets, $curOrder);
-                    if ($curBucket === null || $nextBucketId === null) {
+                    $curBucketId = $bucketIdByOrder[$curOrder] ?? null;
+                    $nextBucketId = $bucketIdByOrder[$curOrder + 1] ?? null;
+                    if ($curBucketId === null || $nextBucketId === null) {
                         break;
                     }
                     // Ambil rate dari transitionRates — tersedia karena projPeriods diperpanjang
-                    $rate = $transitionRates[$curBucket->id][$curPeriod] ?? 0.0;
+                    $rate = $transitionRates[$curBucketId][$curPeriod] ?? 0.0;
                     $compound *= $rate;
                     $curOrder++;
                     $curPeriod = PeriodHelper::shiftForward($curPeriod, 1);
@@ -171,13 +182,49 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
                 : 0.0;
         }
 
-        $history = $this->loadCalculationHistory($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
+        // Rekam jejak audit ringkas — tidak lagi memuat baris mentah per akun (penyebab OOM).
+        // Jumlah baris source dihitung agregat di SQL oleh OutstandingMapLoader.
+        $history = [
+            'row_count' => $loaded['row_count'],
+            'periods' => $outstandingPeriods,
+        ];
+
+        // Step 8 (Phase 3+): Collect detail breakdown per office_code + akad_code + bucket + periode
+        // untuk pivot display di UI. Load detail outstanding aggregate dari financing_account_periods,
+        // lalu hitung transition & compound rates per detail breakdown.
+        $detailOutstanding = OutstandingMapLoader::loadDetailed($usageType->value, $outstandingPeriods, $akadCodes, $officeCode);
+
+        // Compute transition rates per location+akad (needed for compound rate calc)
+        $detailTransitionRates = OutstandingMapLoader::computeDetailedTransitionRates(
+            $detailOutstanding,
+            $bucketIdByOrder,
+        );
+
+        // Compute compound rates per location+akad
+        $compoundPeriods = PeriodHelper::range($rateStart, $compoundEnd);
+        $detailCompoundRates = OutstandingMapLoader::computeDetailedCompoundRates(
+            $detailTransitionRates,
+            $bucketIdByOrder,
+            $compoundPeriods,
+        );
+
+        // Merge outstanding + transition_rate + compound_rate ke satu struktur detail
+        $detailBreakdown = $this->mergeDetailBreakdownWithRates(
+            $detailOutstanding,
+            $detailTransitionRates,
+            $detailCompoundRates,
+        );
+
+        // Compute PD rates per akad breakdown dari detail compound rates
+        $pdRatesPerAkad = $this->computePdRatesPerAkad($detailCompoundRates);
 
         return [
             'pd_rates' => $pdRates,
+            'pd_rates_per_akad' => $pdRatesPerAkad,  // [office_code][akad_code][bucket_id] = pd_rate
             'transition_rates' => $transitionRates,
             'compound_rates' => $compoundRates,
             'outstanding_map' => $outstandingMap,
+            'detail_breakdown' => $detailBreakdown,  // [office_code][akad_code][bucket_id][period] = {outstanding, transition_rate, compound_rate}
             'proj_periods' => $projPeriods,
             'rate_start' => $rateStart,
             'compound_end' => $compoundEnd,
@@ -186,109 +233,82 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
     }
 
     /**
-     * Loads the exact historical rows used to build the PD Netflow outstanding map.
+     * Merge detail outstanding with transition & compound rates.
      *
-     * @param  string[]  $periods
-     * @param  string[]|null  $akadCodes
-     * @return array<int, array<string, mixed>>
+     * @param  array<string, array<string, array<int, array<string, float>>>>  $detailOutstanding
+     * @param  array<string, array<string, array<int, array<string, float>>>>  $detailTransitionRates
+     * @param  array<string, array<string, array<int, array<string, float>>>>  $detailCompoundRates
+     * @return array<string, array<string, array<int, array<string, array{outstanding: float, transition_rate?: float, compound_rate?: float}>>>>
      */
-    private function loadCalculationHistory(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
-    {
-        return PdNetflowBaseline::apply(
-            DB::table('financing_account_periods as fap')
-                ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
-                ->where('fa.usage_type', $usageTypeValue)
-                ->whereIn('fap.period', $periods),
-            $akadCodes,
-            $officeCode,
-        )
-            ->select(
-                'fa.account_number',
-                'fa.customer_name',
-                'fa.product_code',
-                'fa.office_code',
-                'fa.akad_code',
-                'fap.maturity_date',
-                'fap.period',
-                'fap.outstanding_balance',
-                'fap.tgkhari',
-                'fap.collectibility',
-                'fap.financing_status',
-                'fap.writeoff_status',
-            )
-            ->orderBy('fap.period')
-            ->orderBy('fa.account_number')
-            ->get()
-            ->map(static fn (object $row): array => (array) $row)
-            ->all();
-    }
+    private function mergeDetailBreakdownWithRates(
+        array $detailOutstanding,
+        array $detailTransitionRates,
+        array $detailCompoundRates,
+    ): array {
+        $merged = [];
 
-    /**
-     * Returns next bucket ID given current bucket order.
-     */
-    private function getNextBucketId(Collection $buckets, int $currentOrder): ?int
-    {
-        $next = $buckets->firstWhere('bucket_order', $currentOrder + 1);
+        foreach ($detailOutstanding as $officeCode => $byAkad) {
+            foreach ($byAkad as $akadCode => $byBucket) {
+                foreach ($byBucket as $bucketId => $byPeriod) {
+                    foreach ($byPeriod as $period => $outstanding) {
+                        $transRate = $detailTransitionRates[$officeCode][$akadCode][$bucketId][$period] ?? null;
+                        $compRate = $detailCompoundRates[$officeCode][$akadCode][$bucketId][$period] ?? null;
 
-        return $next?->id;
-    }
+                        if (! isset($merged[$officeCode])) {
+                            $merged[$officeCode] = [];
+                        }
+                        if (! isset($merged[$officeCode][$akadCode])) {
+                            $merged[$officeCode][$akadCode] = [];
+                        }
+                        if (! isset($merged[$officeCode][$akadCode][$bucketId])) {
+                            $merged[$officeCode][$akadCode][$bucketId] = [];
+                        }
 
-    /**
-     * Loads outstanding data as nested array [period][bucket_id] = total_outstanding.
-     * Data source: financing_account_periods (per akun), di-aggregate per bucket berdasarkan tgkhari.
-     * Filter akad $akadCodes diteruskan dari calculate() agar konsisten dengan segmentasi kalkulator.
-     * Ref: AGENTS.md §4 — query builder diizinkan untuk agregasi berat
-     *
-     * @param  string[]  $periods
-     * @param  string[]|null  $akadCodes  filter kode akad sesuai konfigurasi parameter kalkulasi
-     * @return array<string, array<int, float>>
-     */
-    private function loadOutstandingMap(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
-    {
-        $buckets = Bucket::orderBy('bucket_order')->get();
-
-        // Query historical data dari financing_account_periods dengan filter akad & kantor dari parameter kalkulasi.
-        $rows = PdNetflowBaseline::apply(
-            DB::table('financing_account_periods as fap')
-                ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
-                ->where('fa.usage_type', $usageTypeValue)
-                ->whereIn('fap.period', $periods),
-            $akadCodes,
-            $officeCode,
-        )
-            ->select('fap.period', 'fap.tgkhari', 'fap.outstanding_balance')
-            ->get();
-
-        $map = [];
-        foreach ($rows as $row) {
-            $period = $row->period;
-            $tgkhari = (int) $row->tgkhari;
-            $outstanding = (float) $row->outstanding_balance;
-
-            $bucketId = $this->resolveBucketFromTgkhari($tgkhari, $buckets);
-
-            if (! isset($map[$period][$bucketId])) {
-                $map[$period][$bucketId] = 0.0;
-            }
-            $map[$period][$bucketId] += $outstanding;
-        }
-
-        return $map;
-    }
-
-    /**
-     * Resolve bucket_id dari tgkhari (hari tunggakan).
-     * Ref: PRD Bab 5 — bucketing berdasarkan rentang hari tunggakan per bucket
-     */
-    private function resolveBucketFromTgkhari(int $tgkhari, Collection $buckets): int
-    {
-        foreach ($buckets as $bucket) {
-            if ($tgkhari >= $bucket->min_days_overdue && $tgkhari <= $bucket->max_days_overdue) {
-                return $bucket->id;
+                        $merged[$officeCode][$akadCode][$bucketId][$period] = [
+                            'outstanding' => (float) $outstanding,
+                            'transition_rate' => $transRate !== null ? (float) $transRate : null,
+                            'compound_rate' => $compRate !== null ? (float) $compRate : null,
+                        ];
+                    }
+                }
             }
         }
 
-        // Fallback: bucket terakhir (B14 — default untuk writeoff/lama)
-        return $buckets->last()->id;
+        return $merged;
+    }
+
+    /**
+     * Compute PD rates per akad breakdown dari detail compound rates.
+     *
+     * PD rate per akad = rata-rata compound rate per akad (like aggregate PD calculation).
+     *
+     * @param  array<string, array<string, array<int, array<string, float>>>>  $detailCompoundRates
+     * @return array<string, array<string, array<int, float>>> [office_code][akad_code][bucket_id] = pd_rate
+     */
+    private function computePdRatesPerAkad(array $detailCompoundRates): array
+    {
+        $pdRates = [];
+
+        foreach ($detailCompoundRates as $officeCode => $byAkad) {
+            foreach ($byAkad as $akadCode => $byBucket) {
+                foreach ($byBucket as $bucketId => $byPeriod) {
+                    $values = array_values($byPeriod ?? []);
+                    $rate = count($values) > 0
+                        ? min(1.0, array_sum($values) / count($values))
+                        : 0.0;
+
+                    if (! isset($pdRates[$officeCode])) {
+                        $pdRates[$officeCode] = [];
+                    }
+                    if (! isset($pdRates[$officeCode][$akadCode])) {
+                        $pdRates[$officeCode][$akadCode] = [];
+                    }
+
+                    $pdRates[$officeCode][$akadCode][$bucketId] = (float) $rate;
+                }
+            }
+        }
+
+        return $pdRates;
     }
 }

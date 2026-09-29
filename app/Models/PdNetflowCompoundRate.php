@@ -25,6 +25,7 @@ class PdNetflowCompoundRate extends Model
         'calculation_run_log_id',
         'usage_type',
         'office_code',
+        'akad_code',
         'from_bucket_id',
         'start_period',
         'compound_rate',

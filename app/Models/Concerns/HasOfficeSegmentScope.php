@@ -51,4 +51,19 @@ trait HasOfficeSegmentScope
             ->withoutGlobalScope('officeConsolidated')
             ->where($table.'.office_code', $officeCode);
     }
+
+    /**
+     * Batasi query ke satu kode akad (level 2 segmentasi).
+     * $akadCode = null berarti semua akad (tidak filter).
+     */
+    public function scopeAkadCode(Builder $query, ?string $akadCode): Builder
+    {
+        if ($akadCode === null) {
+            return $query;
+        }
+
+        $table = $query->getModel()->getTable();
+
+        return $query->where($table.'.akad_code', $akadCode);
+    }
 }

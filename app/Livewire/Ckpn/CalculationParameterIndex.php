@@ -83,6 +83,10 @@ class CalculationParameterIndex extends Component
 
     public string $rangeNotes = '';
 
+    public string $rangeJustificationNotes = '';
+
+    public string $rangeRecommendationValues = '';
+
     // --- Form State: Segmentation Level ---
     public bool $showSegmentationModal = false;
 
@@ -155,7 +159,7 @@ class CalculationParameterIndex extends Component
     {
         $keys = match ($method) {
             'pd_netflow' => ['pd_netflow_rolling_window_months', 'pd_netflow_forward_projection_months', 'pd_netflow_projection_lookback_months', 'pd_netflow_projection_method'],
-            'pd_migration' => ['pd_migration_matrix_count'],
+            'pd_migration' => ['pd_migration_lookback_months', 'pd_migration_matrix_count'],
             'lgd_expected_recoveries' => ['lgd_er_rolling_window_years', 'lgd_er_use_all_account'],
             'lgd_collateral_shortfall' => ['lgd_cs_selling_cost_rate'],
             default => [],
@@ -279,6 +283,8 @@ class CalculationParameterIndex extends Component
         $this->rangeAkadCode = $range->akad_code ?? '';
         $this->rangeIsActive = (bool) $range->is_active;
         $this->rangeNotes = $range->notes ?? '';
+        $this->rangeJustificationNotes = $range->justification_notes ?? '';
+        $this->rangeRecommendationValues = $range->recommendation_values ?? '';
         $this->showDataRangeModal = true;
     }
 
@@ -293,6 +299,8 @@ class CalculationParameterIndex extends Component
             'rangeUsageType' => ['nullable', 'in:1,2,3'],
             'rangeAkadCode' => ['nullable', 'string', 'max:10'],
             'rangeNotes' => ['nullable', 'string', 'max:255'],
+            'rangeJustificationNotes' => ['nullable', 'string', 'max:1000'],
+            'rangeRecommendationValues' => ['nullable', 'string', 'max:255'],
         ]);
 
         $data = [
@@ -305,6 +313,8 @@ class CalculationParameterIndex extends Component
             'akad_code' => $this->rangeAkadCode !== '' ? trim($this->rangeAkadCode) : null,
             'is_active' => $this->rangeIsActive,
             'notes' => $this->rangeNotes ?: null,
+            'justification_notes' => $this->rangeJustificationNotes ?: null,
+            'recommendation_values' => $this->rangeRecommendationValues ?: null,
         ];
 
         if ($this->editingDataRangeId !== null) {
@@ -340,6 +350,8 @@ class CalculationParameterIndex extends Component
         $this->rangeAkadCode = '';
         $this->rangeIsActive = true;
         $this->rangeNotes = '';
+        $this->rangeJustificationNotes = '';
+        $this->rangeRecommendationValues = '';
         $this->resetValidation();
     }
 

@@ -39,9 +39,9 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5
      * @return float LGD rate (0.0–1.0)
      */
-    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): float
+    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): float
     {
-        return $this->calculateWithDetails($usageType, $calculationPeriod, $officeCode)['lgd_rate'];
+        return $this->calculateWithDetails($usageType, $calculationPeriod, $officeCode, $akadCode)['lgd_rate'];
     }
 
     /**
@@ -82,7 +82,7 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      *   recovery_by_year: array<string,float>
      * }
      */
-    public function calculateWithDetails(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculateWithDetails(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Batas tanggal: akhir bulan periode perhitungan → awal jendela 5 tahun ke belakang
         // Ref: PRD Bab 9.1 — window 5 tahun bergerak mengikuti posisi
@@ -92,15 +92,15 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
         // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter lgd_rate_akad_codes
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_LGD_RATE, $usageType?->value);
 
-        $writeoffByYear = $this->aggregateWriteoffByYear($usageType, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode);
-        $recoveryByYear = $this->aggregateRecoveryByYear($usageType, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode);
+        $writeoffByYear = $this->aggregateWriteoffByYear($usageType, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode, $akadCode);
+        $recoveryByYear = $this->aggregateRecoveryByYear($usageType, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode, $akadCode);
 
         $isAllAccount = false;
 
         // Fallback ke all-account jika data segmen tidak cukup — Ref: PRD Bab 9.1
         if ($this->useAllAccount || array_sum($writeoffByYear) <= 0) {
-            $writeoffByYear = $this->aggregateWriteoffByYear(null, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode);
-            $recoveryByYear = $this->aggregateRecoveryByYear(null, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode);
+            $writeoffByYear = $this->aggregateWriteoffByYear(null, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode, $akadCode);
+            $recoveryByYear = $this->aggregateRecoveryByYear(null, $calculationPeriod, $windowStartDate, $akadCodes, $officeCode, $akadCode);
             $isAllAccount = true;
         }
 
@@ -134,7 +134,7 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      *
      * @return array<string, float> Key = tahun (e.g. '2022'), value = total nominal
      */
-    private function aggregateWriteoffByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null): array
+    private function aggregateWriteoffByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Sub-query: daftar akun WO pada periode perhitungan beserta writeoff_date-nya
         // (writeoff_status NOT NULL = akun telah di-write off per periode tsb)
@@ -179,6 +179,11 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
             $query->where('fa.office_code', $officeCode);
         }
 
+        // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
+        if ($akadCode !== null) {
+            $query->where('fa.akad_code', $akadCode);
+        }
+
         return $query->groupBy('year')
             ->orderBy('year')
             ->pluck('total', 'year')
@@ -198,7 +203,7 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      *
      * @return array<string, float>
      */
-    private function aggregateRecoveryByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null): array
+    private function aggregateRecoveryByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null, ?string $akadCode = null): array
     {
         // Step 1-3: ambil daftar akun WO pada periode perhitungan beserta outstanding saat WO
         $writeoffQuery = AkadEligibilityService::restrict(
@@ -242,6 +247,11 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
         // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
         if ($officeCode !== null) {
             $writeoffQuery->where('fa.office_code', $officeCode);
+        }
+
+        // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
+        if ($akadCode !== null) {
+            $writeoffQuery->where('fa.akad_code', $akadCode);
         }
 
         $writeoffAccounts = $writeoffQuery->get();

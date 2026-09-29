@@ -14,7 +14,7 @@ use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnCollectiveResult;
 use App\Models\CkpnPeriod;
-use App\Models\LgdExpectedRecoveriesResult;
+use App\Models\LgdFinalResult;
 use App\Models\PdMigrationResult;
 use App\Models\PdNetflowResult;
 use Illuminate\Support\Facades\DB;
@@ -568,18 +568,19 @@ class CkpnCollectiveResultIndex extends Component
      */
     private function dispatchCollectiveJobs(string $periode, string $pdMethodOverride): void
     {
-        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        // Dispatch per (jenis penggunaan × target kantor × target akad) — Ref: PRD Bab 5 (segmentasi level 1 & 2)
         $dispatched = CalculationDispatchService::dispatchPerSegment(
             runType: RunType::CkpnCollective,
             akadKey: AkadEligibilityService::KEY_CKPN,
             period: $periode,
             userId: auth()->id(),
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => CkpnCollectiveCalculationJob::dispatch(
                 $runLog->id,
                 $usageType->value,
                 $periode,
                 $pdMethodOverride,
                 $officeCode,
+                $akadCode,
             ),
         )['dispatched'];
 
@@ -615,10 +616,12 @@ class CkpnCollectiveResultIndex extends Component
 
     /**
      * Guard: cek ketersediaan PD & LGD untuk periode.
-     * PD method per segmen dibaca dari parameter ckpn_collective_pd_method.
-     * Ref: PRD Bab 11, PRD Bab 12.3
+     * Prasyarat yang dibaca job adalah snapshot LGD Final (hasil gabungan ER + CS),
+     * bukan LGD ER mentah. Ref: PRD Bab 11, PRD Bab 12.3
+     *
+     * @return array<int, string> daftar segmen yang datanya belum lengkap (kosong = siap)
      */
-    private function pdLgdAvailable(string $periode): bool
+    private function pdLgdMissing(string $periode): array
     {
         $missing = [];
 
@@ -628,13 +631,13 @@ class CkpnCollectiveResultIndex extends Component
                 ? PdNetflowResult::where('usage_type', $usageType->value)->where('calculation_period', $periode)->exists()
                 : PdMigrationResult::where('usage_type', $usageType->value)->where('calculation_period', $periode)->exists();
 
-            $hasLgd = LgdExpectedRecoveriesResult::where('usage_type', $usageType->value)
+            $hasLgd = LgdFinalResult::where('usage_type', $usageType->value)
                 ->where('calculation_period', $periode)
                 ->exists();
 
             if (! $hasPd || ! $hasLgd) {
                 $missing[] = sprintf(
-                    '%s (PD %s: %s, LGD ER: %s)',
+                    '%s (PD %s: %s, LGD Final: %s)',
                     $usageType->label(),
                     strtoupper($pdMethod),
                     $hasPd ? 'ada' : 'belum ada',
@@ -643,9 +646,17 @@ class CkpnCollectiveResultIndex extends Component
             }
         }
 
+        return $missing;
+    }
+
+    /** Gate sebelum dispatch: tolak bila ada segmen yang prasyaratnya belum lengkap. */
+    private function pdLgdAvailable(string $periode): bool
+    {
+        $missing = $this->pdLgdMissing($periode);
+
         if ($missing !== []) {
             $detail = implode('; ', $missing);
-            $this->dispatch('notify', type: 'error', message: "CKPN Kolektif tidak dapat dijalankan. Data berikut belum tersedia untuk periode {$periode}: {$detail}");
+            $this->dispatch('notify', type: 'error', message: "CKPN Kolektif tidak dapat dijalankan. Jalankan LGD Final terlebih dahulu. Data berikut belum tersedia untuk periode {$periode}: {$detail}");
 
             return false;
         }
@@ -705,18 +716,8 @@ class CkpnCollectiveResultIndex extends Component
         $pdLgdAvailable = true;
         $pdLgdMissing = [];
         if ($this->runPeriode !== '') {
-            foreach (UsageType::cases() as $usageType) {
-                $pdMethod = $this->resolvePdMethod($usageType);
-                $hasPd = $pdMethod === 'netflow'
-                    ? PdNetflowResult::where('usage_type', $usageType->value)->where('calculation_period', $this->runPeriode)->exists()
-                    : PdMigrationResult::where('usage_type', $usageType->value)->where('calculation_period', $this->runPeriode)->exists();
-                $hasLgd = LgdExpectedRecoveriesResult::where('usage_type', $usageType->value)->where('calculation_period', $this->runPeriode)->exists();
-
-                if (! $hasPd || ! $hasLgd) {
-                    $pdLgdAvailable = false;
-                    $pdLgdMissing[] = $usageType->label().' (PD: '.($hasPd ? 'ada' : 'belum').', LGD: '.($hasLgd ? 'ada' : 'belum').')';
-                }
-            }
+            $pdLgdMissing = $this->pdLgdMissing($this->runPeriode);
+            $pdLgdAvailable = $pdLgdMissing === [];
         }
 
         $periods = CkpnPeriod::query()->orderByDesc('period')->get(['period', 'status']);

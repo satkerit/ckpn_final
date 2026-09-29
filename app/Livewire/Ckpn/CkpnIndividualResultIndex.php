@@ -133,13 +133,13 @@ class CkpnIndividualResultIndex extends Component
 
         $userId = auth()->id();
 
-        // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
+        // Dispatch per (jenis penggunaan × target kantor × target akad) — Ref: PRD Bab 5 (segmentasi level 1 & 2)
         $dispatched = CalculationDispatchService::dispatchPerSegment(
             runType: RunType::CkpnIndividual,
             akadKey: AkadEligibilityService::KEY_CKPN,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnIndividualCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => CkpnIndividualCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {

@@ -342,8 +342,25 @@
     @if($showDataRangeModal)
         <div class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
             <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" wire:click="$set('showDataRangeModal', false)"></div>
-            <div class="relative w-full max-w-lg rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+            <div class="relative w-full max-w-2xl rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
                 <h3 class="text-sm font-semibold text-zinc-100">{{ $editingDataRangeId ? 'Ubah' : 'Tambah' }} Rentang Data</h3>
+                
+                {{-- Guidance Card --}}
+                @php
+                    $guidance = $rangeCatalog[$rangeKey]['guidance'] ?? null;
+                    $recommendedValues = $rangeCatalog[$rangeKey]['recommended_values'] ?? null;
+                @endphp
+                @if($guidance || $recommendedValues)
+                    <div class="mb-4 mt-3 rounded-lg border border-sky-800/40 bg-sky-950/30 p-3">
+                        @if($guidance)
+                            <p class="text-xs text-sky-300">📌 <strong>Panduan:</strong> {{ $guidance }}</p>
+                        @endif
+                        @if($recommendedValues)
+                            <p class="mt-1.5 text-xs text-sky-300"><strong>Nilai Rekomendasi:</strong> {{ implode(', ', $recommendedValues) }}</p>
+                        @endif
+                    </div>
+                @endif
+                
                 <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label class="mb-1.5 block text-xs font-medium text-zinc-400">Metode</label>
@@ -402,6 +419,21 @@
                         <label class="mb-1.5 block text-xs font-medium text-zinc-400">Catatan</label>
                         <input type="text" wire:model="rangeNotes"
                                class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                    </div>
+                    <div class="sm:col-span-2 border-t border-zinc-800 pt-3">
+                        <p class="text-xs text-zinc-500">Justifikasi & Rekomendasi — opsional, untuk audit trail dokumentasi.</p>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-xs font-medium text-zinc-400">Alasan Perubahan (Justifikasi)</label>
+                        <textarea wire:model="rangeJustificationNotes" rows="3"
+                               class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                               placeholder="Contoh: Perubahan dari 36 ke 60 bulan untuk meningkatkan stabilitas PD sesuai rekomendasi Risk Committee."></textarea>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="mb-1.5 block text-xs font-medium text-zinc-400">Nilai Rekomendasi (CSV)</label>
+                        <input type="text" wire:model="rangeRecommendationValues" placeholder="mis. 12,24,36,48,60"
+                               class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                        <p class="mt-1 text-xs text-zinc-500">Nilai alternatif yang disarankan untuk parameter ini.</p>
                     </div>
                 </div>
                 <div class="mt-6 flex gap-2">

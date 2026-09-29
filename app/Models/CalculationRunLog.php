@@ -24,6 +24,7 @@ class CalculationRunLog extends Model
         'run_type',
         'usage_type',
         'office_code',
+        'akad_code',
         'status',
         'triggered_by_user_id',
         'approved_by_user_id',

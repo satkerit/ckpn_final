@@ -14,6 +14,7 @@ class PdNetflowCalculationHistory extends Model
         'calculation_period',
         'usage_type',
         'office_code',
+        'akad_code',
         'history_data',
     ];
 

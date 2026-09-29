@@ -47,9 +47,10 @@ final class MigrationMatrixBuilder
      * @param  string  $cohortPeriod  Periode triwulanan awal (yyyymm, harus Mar/Jun/Sep/Des)
      * @param  string  $endPeriod  Periode triwulanan akhir (= cohortPeriod + 12 bulan)
      * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); NULL = konsolidasi
      * @return array<int, array{from_quality_grade_id:int, to_quality_grade_id:?int, migration_rate:float, source_outstanding:float, destination_outstanding:float}>
      */
-    public function buildRows(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?string $officeCode = null): array
+    public function buildRows(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $usageType->value);
 
@@ -57,11 +58,13 @@ final class MigrationMatrixBuilder
             // Jalur per-kantor: tabel financing_outstanding_quarterly tidak punya dimensi kantor,
             // jadi outstanding per grade dihitung langsung dari financing_account_periods.
             // Ref: AGENTS.md §4 — query builder untuk agregasi berat
-            $sourceOs = $this->gradeOutstandingFromPeriods($usageType, $cohortPeriod, $akadCodes, $officeCode);
-            $destOs = $this->gradeOutstandingFromPeriods($usageType, $endPeriod, $akadCodes, $officeCode);
-            $woAmount = $this->writeoffAmount($usageType, $cohortPeriod, $endPeriod, $akadCodes, $officeCode);
+            $sourceOs = $this->gradeOutstandingFromPeriods($usageType, $cohortPeriod, $akadCodes, $officeCode, $akadCode);
+            $destOs = $this->gradeOutstandingFromPeriods($usageType, $endPeriod, $akadCodes, $officeCode, $akadCode);
+            $woAmount = $this->writeoffAmount($usageType, $cohortPeriod, $endPeriod, $akadCodes, $officeCode, $akadCode);
         } else {
             // Load outstanding at cohort start (source)
+            // financing_outstanding_quarterly is aggregated and doesn't have akad_code dimension
+            // Filter by akad_code only works via financing_account_periods (gradeOutstandingFromPeriods)
             $sourceData = FinancingOutstandingQuarterly::where('usage_type', $usageType->value)
                 ->where('period', $cohortPeriod)
                 ->get()
@@ -83,7 +86,7 @@ final class MigrationMatrixBuilder
                 $destOs[$gradeId] = (float) $row->total_outstanding;
             }
 
-            $woAmount = $this->writeoffAmount($usageType, $cohortPeriod, $endPeriod, $akadCodes, null);
+            $woAmount = $this->writeoffAmount($usageType, $cohortPeriod, $endPeriod, $akadCodes, null, $akadCode);
         }
 
         $allGrades = QualityGrade::orderBy('collectibility_number')->get();
@@ -149,13 +152,15 @@ final class MigrationMatrixBuilder
      *
      * @param  string  $cohortPeriod  Periode triwulanan awal (yyyymm, harus Mar/Jun/Sep/Des)
      * @param  string  $endPeriod  Periode triwulanan akhir (= cohortPeriod + 12 bulan)
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = konsolidasi
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); NULL = konsolidasi
      * @return array<int, array<int|string, float>>
      */
-    public function build(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?string $officeCode = null): array
+    public function build(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         $matrix = [];
 
-        foreach ($this->buildRows($usageType, $cohortPeriod, $endPeriod, $officeCode) as $row) {
+        foreach ($this->buildRows($usageType, $cohortPeriod, $endPeriod, $officeCode, $akadCode) as $row) {
             $matrix[$row['from_quality_grade_id']][$row['to_quality_grade_id'] ?? 'wo'] = $row['migration_rate'];
         }
 
@@ -167,9 +172,10 @@ final class MigrationMatrixBuilder
      * Kolektibilitas akun dipetakan ke quality_grades.collectibility_number.
      *
      * @param  string[]|null  $akadCodes
+     * @param  string|null  $akadCode  Specific akad code for level 2 segmentasi (null = konsolidasi)
      * @return array<int, float> key = quality_grade_id, value = total outstanding
      */
-    private function gradeOutstandingFromPeriods(UsageType $usageType, string $period, ?array $akadCodes, string $officeCode): array
+    private function gradeOutstandingFromPeriods(UsageType $usageType, string $period, ?array $akadCodes, string $officeCode, ?string $akadCode = null): array
     {
         $rows = AkadEligibilityService::restrict(
             DB::table('financing_account_periods as fap')
@@ -178,6 +184,7 @@ final class MigrationMatrixBuilder
                 ->where('fap.period', $period)
                 ->where('fa.usage_type', $usageType->value)
                 ->where('fa.office_code', $officeCode)
+                ->when($akadCode !== null, fn ($q) => $q->where('fa.akad_code', $akadCode))
                 // Akad 03 hanya jika sudah JTP pada periode — konsisten dengan PD Netflow
                 ->where(function ($q): void {
                     $q->where('fa.akad_code', '!=', '03')
@@ -203,11 +210,12 @@ final class MigrationMatrixBuilder
     }
 
     /**
-     * Total writeoff selama window cohort, dengan filter kantor opsional (level 1).
+     * Total writeoff selama window cohort, dengan filter kantor opsional (level 1) dan akad (level 2).
      *
      * @param  string[]|null  $akadCodes
+     * @param  string|null  $akadCode  Specific akad code for level 2 segmentasi (null = konsolidasi)
      */
-    private function writeoffAmount(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?array $akadCodes, ?string $officeCode): float
+    private function writeoffAmount(UsageType $usageType, string $cohortPeriod, string $endPeriod, ?array $akadCodes, ?string $officeCode = null, ?string $akadCode = null): float
     {
         return (float) FinancingAccountPeriod::where('period', '>=', $cohortPeriod)
             ->where('period', '<=', $endPeriod)
@@ -220,10 +228,11 @@ final class MigrationMatrixBuilder
                             ->orWhereRaw('maturity_date > writeoff_date');
                     });
             })
-            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode) {
+            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode, $akadCode) {
                 $q->where('usage_type', $usageType->value)
                     ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
-                    ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
+                    ->when($akadCode !== null, fn ($w) => $w->where('akad_code', $akadCode))
+                    ->when($akadCodes !== null && $akadCode === null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
             })
             ->sum('outstanding_balance');
     }

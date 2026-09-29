@@ -72,6 +72,8 @@ class LgdErCalculationJob implements ShouldQueue
         private readonly string $calculationPeriod,
         /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
         private readonly ?string $officeCode = null,
+        /** NULL = konsolidasi semua akad; 'xxx' = pecahan per kode akad (level 2 segmentasi) */
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -110,21 +112,25 @@ class LgdErCalculationJob implements ShouldQueue
             $windowYears = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::LgdExpectedRecoveries,
                 'lgd_er_rolling_window_years',
+                officeCode: $this->officeCode,
                 usageType: $this->usageType,
+                akadCode: $this->akadCode,
                 default: 5,
             );
 
             $useAllAccount = (bool) CalculationDataRange::resolveValue(
                 CalculationMethodKey::LgdExpectedRecoveries,
                 'lgd_er_use_all_account',
+                officeCode: $this->officeCode,
                 usageType: $this->usageType,
+                akadCode: $this->akadCode,
                 default: false,
             );
 
             $calculator = new LgdExpectedRecoveriesCalculator($windowYears, $useAllAccount);
             $writer = new SnapshotWriter;
 
-            $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod, $this->officeCode);
+            $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
             $dataStart = PeriodHelper::shiftBack($this->calculationPeriod, $windowYears * 12);
 
             // Catatan dasar data perhitungan — Ref: instruksi user (notes per baris hasil)
@@ -161,6 +167,7 @@ class LgdErCalculationJob implements ShouldQueue
                 isAllAccount: $details['is_all_account'],
                 notes: $notes,
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

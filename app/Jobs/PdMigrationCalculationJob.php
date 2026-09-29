@@ -56,6 +56,8 @@ class PdMigrationCalculationJob implements ShouldQueue
         private readonly string $calculationPeriod,
         /** NULL = konsolidasi semua kantor; 'xxx' = pecahan per kode kantor (level 1 segmentasi) */
         private readonly ?string $officeCode = null,
+        /** NULL = konsolidasi semua akad; 'xx' = pecahan per kode akad (level 2 segmentasi) */
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -91,20 +93,37 @@ class PdMigrationCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            // Ambil jumlah matriks migrasi dari calculation_data_ranges (Ref: AGENTS.md §9 — jangan hardcode)
-            $matrixCount = (int) CalculationDataRange::resolveValue(
+            // Ambil lookback_months (default 12), hitung matrix_count dinamis (Ref: IMPROVEMENT_PLAN_PD_CALCULATION Phase 2)
+            $lookbackMonths = (int) CalculationDataRange::resolveValue(
+                CalculationMethodKey::PdMigration,
+                'pd_migration_lookback_months',
+                officeCode: $this->officeCode,
+                usageType: (int) $this->usageType,
+                akadCode: $this->akadCode,
+                default: 12,
+            );
+
+            // Matrix count = ceil(lookback_months / 3) — setiap matriks span 3 bulan mundur
+            $matrixCount = (int) ceil($lookbackMonths / 3);
+
+            // Legacy fallback: jika pd_migration_matrix_count explicit set, pakai itu (backward compat)
+            $matrixCountLegacy = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::PdMigration,
                 'pd_migration_matrix_count',
                 officeCode: $this->officeCode,
                 usageType: (int) $this->usageType,
-                default: 4,
+                akadCode: $this->akadCode,
+                default: null,
             );
+            if ($matrixCountLegacy !== null) {
+                $matrixCount = $matrixCountLegacy;
+            }
 
             $builder = new MigrationMatrixBuilder;
             $calculator = new PdMigrationCalculator($builder, $matrixCount);
             $writer = new SnapshotWriter;
 
-            $pdRates = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode);
+            $pdRates = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
             // Resolve data range untuk metadata (Ref: pd-migration.md Bab 1-2)
             // Anchor quarter T diturunkan dari calculationPeriod; matriks ke-(N-1) = T - 3(N-1) bulan,
@@ -143,6 +162,7 @@ class PdMigrationCalculationJob implements ShouldQueue
                 pdRates: $pdRates,
                 notes: $notes,
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             // Simpan detail matriks migrasi per cohort (satu baris per from_grade → to_grade/WO).
@@ -151,7 +171,7 @@ class PdMigrationCalculationJob implements ShouldQueue
             $matrixRows = [];
 
             foreach ($cohorts as [$startPeriod, $endPeriod]) {
-                foreach ($builder->buildRows($usageType, $startPeriod, $endPeriod, $this->officeCode) as $row) {
+                foreach ($builder->buildRows($usageType, $startPeriod, $endPeriod, $this->officeCode, $this->akadCode) as $row) {
                     $matrixRows[] = [
                         'from_quality_grade_id' => $row['from_quality_grade_id'],
                         'to_quality_grade_id' => $row['to_quality_grade_id'],
@@ -169,6 +189,7 @@ class PdMigrationCalculationJob implements ShouldQueue
                 calculationPeriod: $this->calculationPeriod,
                 rows: $matrixRows,
                 officeCode: $this->officeCode,
+                akadCode: $this->akadCode,
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);

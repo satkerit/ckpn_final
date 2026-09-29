@@ -45,12 +45,13 @@ final class PdMigrationCalculator implements PdCalculationMethodInterface
      * - $usageType         : segmen pembiayaan (enum UsageType).
      * - $calculationPeriod : periode perhitungan format yyyymm.
      * - $officeCode        : kode kantor (level 1 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5.
+     * - $akadCode          : kode akad (level 2 segmentasi); NULL = konsolidasi — Ref: PRD Bab 5.
      *
      * Ref: PRD Bab 8, pd-migration.md
      *
      * @return array<int, float> Key = quality_grade_id, value = pd_rate (migration to WO)
      */
-    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null): array
+    public function calculate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
     {
         $cohorts = $this->resolveCohorts($calculationPeriod);
         $allGrades = QualityGrade::orderBy('collectibility_number')->get();
@@ -58,7 +59,7 @@ final class PdMigrationCalculator implements PdCalculationMethodInterface
         $pdAccumulator = [];
 
         foreach ($cohorts as [$cohortPeriod, $endPeriod]) {
-            $matrix = $this->matrixBuilder->build($usageType, $cohortPeriod, $endPeriod, $officeCode);
+            $matrix = $this->matrixBuilder->build($usageType, $cohortPeriod, $endPeriod, $officeCode, $akadCode);
 
             foreach ($allGrades as $grade) {
                 if (! isset($matrix[$grade->id])) {

@@ -28,12 +28,22 @@
             </select>
         </div>
         <div>
-            <label class="mb-1 block text-xs font-medium text-zinc-400">Status</label>
-            <select wire:model.live="filterResolved"
+            <label class="mb-1 block text-xs font-medium text-zinc-400">Severity</label>
+            <select wire:model.live="filterSeverity"
                 class="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
-                <option value="">Semua</option>
-                <option value="0">Belum Resolved</option>
-                <option value="1">Sudah Resolved</option>
+                <option value="">Semua Level</option>
+                @foreach ($severities as $sev)
+                    <option value="{{ $sev->value }}">{{ $sev->label() }}</option>
+                @endforeach
+            </select>
+        </div>
+        <div>
+            <label class="mb-1 block text-xs font-medium text-zinc-400">Status</label>
+            <select wire:model.live="filterStatus"
+                class="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                <option value="">Semua Status</option>
+                <option value="pending">Pending</option>
+                <option value="resolved">Resolved</option>
             </select>
         </div>
     </div>
@@ -58,14 +68,14 @@
                     <th class="px-4 py-3 text-left font-medium text-zinc-400">Bucket</th>
                     <th class="px-4 py-3 text-left font-medium text-zinc-400">Jenis Anomali</th>
                     <th class="px-4 py-3 text-left font-medium text-zinc-400">Deskripsi</th>
+                    <th class="px-4 py-3 text-center font-medium text-zinc-400">Severity</th>
                     <th class="px-4 py-3 text-center font-medium text-zinc-400">Status</th>
-                    <th class="px-4 py-3 text-left font-medium text-zinc-400">Resolved Oleh</th>
-                    <th class="px-4 py-3 text-left font-medium text-zinc-400">Aksi</th>
+                    <th class="px-4 py-3 text-left font-medium text-zinc-400">Reviewed By</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-zinc-800">
                 @forelse ($records as $record)
-                    <tr class="hover:bg-zinc-800/50 {{ $record->is_resolved ? 'opacity-60' : '' }}">
+                    <tr class="hover:bg-zinc-800/50">
                         <td class="px-4 py-3 font-mono text-zinc-300">{{ $record->period }}</td>
                         <td class="px-4 py-3 text-zinc-300">{{ $record->usage_type?->label() ?? '-' }}</td>
                         <td class="px-4 py-3 text-zinc-300">{{ $record->bucket?->code ?? '-' }}</td>
@@ -82,35 +92,30 @@
                             {{ $record->description }}
                         </td>
                         <td class="px-4 py-3 text-center">
-                            @if ($record->is_resolved)
-                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                                    Resolved
-                                </span>
-                            @else
-                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-                                    Open
-                                </span>
-                            @endif
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                                {{ $record->severity->value === 'critical' ? 'bg-red-950/60 text-red-300' : '' }}
+                                {{ $record->severity->value === 'warning' ? 'bg-amber-950/60 text-amber-300' : '' }}
+                                {{ $record->severity->value === 'info' ? 'bg-blue-950/60 text-blue-300' : '' }}
+                            ">
+                                {{ $record->severity->label() }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
+                                {{ $record->status === 'pending' ? 'bg-amber-100 text-amber-700' : '' }}
+                                {{ $record->status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : '' }}
+                            ">
+                                {{ ucfirst($record->status) }}
+                            </span>
                         </td>
                         <td class="px-4 py-3 text-zinc-400">
-                            @if ($record->is_resolved)
-                                <span>{{ $record->resolvedBy?->name ?? '-' }}</span>
-                                @if ($record->resolved_at)
-                                    <br><span class="text-zinc-500">{{ $record->resolved_at->format('d/m/Y H:i') }}</span>
+                            @if ($record->reviewed_by)
+                                <span>{{ $record->reviewedBy?->name ?? '-' }}</span>
+                                @if ($record->reviewed_at)
+                                    <br><span class="text-zinc-500">{{ $record->reviewed_at->format('d/m/Y H:i') }}</span>
                                 @endif
                             @else
                                 —
-                            @endif
-                        </td>
-                        <td class="px-4 py-3">
-                            @if (!$record->is_resolved)
-                                <button wire:click="confirmMarkResolved({{ $record->id }})"
-                                    class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 transition-colors">
-                                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
-                                    </svg>
-                                    Tandai Resolved
-                                </button>
                             @endif
                         </td>
                     </tr>
@@ -131,16 +136,4 @@
             {{ $records->links() }}
         </div>
     @endif
-
-    {{-- Modal Konfirmasi Tandai Resolved --}}
-    <div x-show="$wire.confirmingResolveId !== null" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-        <div class="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
-            <h3 class="font-semibold text-zinc-100 mb-2">Konfirmasi Resolved</h3>
-            <p class="text-sm text-zinc-400 mb-4">Yakin ingin menandai anomali ini sebagai resolved? Status tidak bisa dikembalikan.</p>
-            <div class="flex gap-2 justify-end">
-                <button wire:click="$set('confirmingResolveId', null)" class="px-3 py-1.5 text-sm rounded-lg border border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white">Batal</button>
-                <button wire:click="markResolved($wire.confirmingResolveId)" class="px-3 py-1.5 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 font-semibold shadow-sm">Ya, Tandai Resolved</button>
-            </div>
-        </div>
-    </div>
 </div>
