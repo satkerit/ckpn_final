@@ -130,7 +130,6 @@ final class CkpnIndividualCalculator
         $rate = DB::table('pd_netflow_result')
             ->where('from_bucket_id', $bucket)
             ->where('usage_type', $usageType->value)
-            ->where('is_all_account', false)
             ->latest('id')
             ->value('pd_rate');
 
