@@ -17,6 +17,7 @@ Spesifikasi bisnis lengkap ada di `PRD.md` — **jangan duplikasikan isi PRD di 
    5b. **Sebelum menulis kode migrasi/model baru, cek dulu apakah tabel/model serupa sudah ada** (lihat Bab 15 PRD untuk daftar tabel) agar tidak membuat struktur duplikat.
 7. **Jangan jalankan test suite penuh setiap kali** kalau hanya mengubah 1 file kecil — jalankan test yang scope-nya relevan dulu (`--filter`), full suite hanya sebelum commit/PR akhir fase.
 8. **Tidak perlu menjelaskan ulang arsitektur** yang sudah dijelaskan di PRD/AGENTS.md ini di setiap respons — asumsikan sudah dibaca, langsung eksekusi.
+9. **Wajib konfirmasi user** sebelum menjalankan/menyusun operasi apa pun yang berisiko kehilangan data — lihat Bab 13. Tidak ada pengecualian.
 
 ---
 
@@ -150,6 +151,7 @@ Jangan salin ulang rumus/penjelasan panjang dari PRD ke kode/komentar. Cukup gun
 - ❌ Jangan menggabungkan logic PD Netflow dan PD Migration dalam satu class/method.
 - ❌ Jangan expose proses perhitungan berat sebagai synchronous HTTP request — selalu lewat Queue Job.
 - ❌ Jangan menulis ulang seluruh PRD.md ke dalam README/komentar — cukup link/referensi bab.
+- ❌ Jangan menjalankan/menyusun operasi penghapusan atau penimpaan data (DELETE massal, TRUNCATE, DROP/dropColumn, migrate:fresh/refresh destruktif, reset seeder, git reset --hard, dll.) tanpa konfirmasi eksplisit user — lihat Bab 13.
 
 ---
 
@@ -215,6 +217,42 @@ Setiap kali menyelesaikan satu unit pekerjaan (1 fitur kecil, 1 fase, 1 perbaika
 3. **Tandai open item yang sudah terjawab.** Jika suatu keputusan dari PRD Bab 12 (Open Items) sudah dikonfirmasi user selama development, pindahkan/hapus dari daftar open item dan catat keputusan final di bab terkait — jangan biarkan dua sumber kebenaran (PRD lama vs keputusan baru di chat/commit) berbeda.
 4. **Jangan tunda update dokumentasi ke akhir proyek.** Update dilakukan **di commit yang sama** dengan perubahan kode, bukan sebagai commit terpisah "nanti dirapikan".
 5. **Ringkasan ke user**: setiap merespons setelah menyelesaikan pekerjaan, sertakan ringkasan singkat (3-5 poin: apa yang selesai, file yang berubah, status test, next step) — bukan menampilkan ulang seluruh kode/file yang sudah dibuat.
+
+---
+
+## 13. Kebijakan WAJIB: Konfirmasi Sebelum Operasi Berisiko Kehilangan Data
+
+Agent **wajib meminta konfirmasi eksplisit dari user dan menunggu persetujuan** sebelum menjalankan ATAU menyusun perubahan apa pun yang berpotensi menghapus/menimpa data — di database, file, maupun repository. Aturan ini tidak memiliki pengecualian, termasuk saat perubahan terlihat kecil atau user meminta cepat.
+
+### 13.1 Cakupan Operasi yang WAJIB Dikonfirmasi
+
+| Kategori | Contoh operasi |
+| --- | --- |
+| DDL destruktif | `DROP TABLE`, `DROP DATABASE`, `DROP COLUMN`, `DROP INDEX` pada data terpakai, `TRUNCATE`, ubah tipe kolom yang berisiko kehilangan nilai |
+| DML penghapusan | `DELETE` massal/tanpa key spesifik, `Model::truncate()`, `->delete()` pada koleksi luas, hard delete yang menggantikan soft delete |
+| Artisan destruktif | `migrate:fresh`, `migrate:refresh`, `migrate:rollback` yang menghapus data/kolom, `db:wipe`, reset seeder yang menimpa/menghapus data existing |
+| Data snapshot CKPN | Hapus/timpa baris `pd_netflow_result`, `pd_migration_result`, `lgd_*_result`, `ckpn_*_result`, atau tabel master (`risk_segments`, `akad_calculation_rules`, dsb. — PRD Bab 15). Snapshot bersifat immutable; penghapusan = hilangnya histori audit |
+| Queue/Job | `queue:flush`, `queue:clear`, `queue:restart`, atau membatalkan batch saat perhitungan berjalan (PRD Bab 13.2) |
+| File data | Hapus/overwrite file import/ekspor di `storage/app`, `rm -rf` di luar target yang eksplisit diminta user |
+| Repository | `git reset --hard`, `git clean -fd`, `git checkout/restore .`, `git push --force`, `commit --amend` pada commit yang sudah di-push |
+
+Operasi di luar daftar tapi berpotensi serupa (mis. `updateOrCreate`/`upsert` massal yang menimpa banyak nilai existing) diperlakukan sama: **konfirmasi dulu**.
+
+### 13.2 Format Konfirmasi (Sebelum Eksekusi)
+
+Nyatakan ringkas 4 poin berikut, lalu **berhenti sampai user menjawab setuju**:
+
+1. **Aksi** — perintah/kode persis yang akan dijalankan.
+2. **Dampak** — tabel/file/rentang data yang terdampak; bila bisa dihitung, tampilkan jumlah barisnya dulu (mis. `SELECT COUNT(*) ...`) sebelum meminta persetujuan.
+3. **Reversibility** — apakah bisa di-rollback (backup, soft delete, `migration down`) atau permanen.
+4. **Pertanyaan eksplisit** — "Lanjutkan? (ya/tidak)".
+
+### 13.3 Mitigasi Wajib Setelah User Setuju
+
+1. Untuk penghapusan massal di environment non-dev, usulkan **backup atau soft delete** dulu (dump tabel terkait / tambah `deleted_at`) sebelum hard delete.
+2. Migration destruktif (`dropColumn`, `dropTable`) dibuat **di file migration terpisah**, tidak digabung dengan migration lain, dan diberi catatan destruktif di deskripsinya.
+3. Jangan merantai beberapa operasi destruktif dalam satu perintah — eksekusi per langkah.
+4. Setelah selesai, catat operasi destruktif yang dijalankan (beserta persetujuan user) di `PROGRESS.md` (Bab 12).
 
 ---
 

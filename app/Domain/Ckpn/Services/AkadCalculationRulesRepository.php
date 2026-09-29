@@ -27,12 +27,31 @@ final class AkadCalculationRulesRepository
         $cacheKey = self::CACHE_KEY_PREFIX . $akadCode;
 
         return Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($akadCode): string {
-            $rule = AkadCalculationRule::active()
-                ->where('akad_code', $akadCode)
+            $rule = AkadCalculationRule::where('akad_code', $akadCode)
+                ->where('is_active', true)
                 ->first();
 
-            return $rule?->getUseField() ?? 'outstanding_balance';
+            return $rule?->use_field ?? 'outstanding_balance';
         });
+    }
+
+    /**
+     * Resolve field untuk calculationPeriod, officeCode, akadCode.
+     * Wrapper untuk getFieldForAkad() — gunakan akad_code langsung.
+     * Ref: PRD Bab 5, 7 — Akad Segmentation Level 2
+     *
+     * @param  string  $calculationPeriod  Format yyyymm (tidak digunakan saat ini, reserved untuk future logic)
+     * @param  string|null  $officeCode  Office code (tidak digunakan saat ini, reserved)
+     * @param  string|null  $akadCode  Akad code untuk resolve field; null → default outstanding_balance
+     * @return string 'outstanding_balance' atau 'tgkmdl'
+     */
+    public function resolveField(string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): string
+    {
+        if ($akadCode === null) {
+            return 'outstanding_balance';
+        }
+
+        return $this->getFieldForAkad($akadCode);
     }
 
     /**
@@ -58,13 +77,13 @@ final class AkadCalculationRulesRepository
 
         // Fetch missing from DB
         if ($missingFromCache !== []) {
-            $rules = AkadCalculationRule::active()
+            $rules = AkadCalculationRule::where('is_active', true)
                 ->whereIn('akad_code', $missingFromCache)
                 ->get()
                 ->keyBy('akad_code');
 
             foreach ($missingFromCache as $akadCode) {
-                $field = $rules[$akadCode]?->getUseField() ?? 'outstanding_balance';
+                $field = $rules[$akadCode]?->use_field ?? 'outstanding_balance';
                 $result[$akadCode] = $field;
                 Cache::put(self::CACHE_KEY_PREFIX . $akadCode, $field, self::CACHE_TTL_SECONDS);
             }
@@ -78,7 +97,7 @@ final class AkadCalculationRulesRepository
      */
     public function getAllActiveRules(): array
     {
-        return AkadCalculationRule::active()->get()->toArray();
+        return AkadCalculationRule::where('is_active', true)->get()->toArray();
     }
 
     /**
@@ -99,6 +118,6 @@ final class AkadCalculationRulesRepository
      */
     public function hasRule(string $akadCode): bool
     {
-        return AkadCalculationRule::active()->where('akad_code', $akadCode)->exists();
+        return AkadCalculationRule::where('is_active', true)->where('akad_code', $akadCode)->exists();
     }
 }

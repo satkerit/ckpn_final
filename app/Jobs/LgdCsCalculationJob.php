@@ -100,7 +100,7 @@ class LgdCsCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
-            $calculator = new LgdCollateralShortfallCalculator;
+            $calculator = app(LgdCollateralShortfallCalculator::class);
             $writer = new SnapshotWriter;
 
             $accountResults = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);

@@ -15,6 +15,7 @@ use App\Jobs\PdNetflowCalculationJob;
 use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
+use App\Models\FinancingAccount;
 use App\Models\LgdExpectedRecoveriesResult;
 use App\Models\PdNetflowConsolidated;
 use App\Models\PdNetflowInvestasi;
@@ -45,6 +46,12 @@ class PdNetflowResultIndex extends Component
 
     #[Url(as: 'periode')]
     public string $filterPeriode = '';
+
+    #[Url(as: 'office_code')]
+    public string $filterOfficeCode = '';
+
+    #[Url(as: 'akad_code')]
+    public string $filterAkadCode = '';
 
     #[Url]
     public string $search = '';
@@ -106,6 +113,16 @@ class PdNetflowResultIndex extends Component
     }
 
     public function updatedFilterPeriode(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedFilterOfficeCode(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedFilterAkadCode(): void
     {
         $this->resetPage();
     }
@@ -380,10 +397,14 @@ class PdNetflowResultIndex extends Component
                 ->with(['calculationRunLog', 'fromBucket'])
                 ->when($this->filterUsageType !== '', fn ($q) => $q->where('usage_type', (int) $this->filterUsageType))
                 ->when($this->filterPeriode !== '', fn ($q) => $q->where('calculation_period', $this->filterPeriode))
+                ->when($this->filterOfficeCode !== '', fn ($q) => $q->where('office_code', $this->filterOfficeCode))
+                ->when($this->filterAkadCode !== '', fn ($q) => $q->where('akad_code', $this->filterAkadCode))
                 ->when($this->search, fn ($q) => $q->where(
                     fn ($w) => $w
                         ->where('calculation_period', 'like', "%{$this->search}%")
                         ->orWhere('usage_type', 'like', "%{$this->search}%")
+                        ->orWhere('office_code', 'like', "%{$this->search}%")
+                        ->orWhere('akad_code', 'like', "%{$this->search}%")
                 ))
                 ->orderByDesc('calculation_period')
                 ->orderBy('usage_type')
@@ -391,6 +412,26 @@ class PdNetflowResultIndex extends Component
             : PdNetflowResult::query()->whereRaw('0=1')->paginate(25);
 
         $periods = CkpnPeriod::select('id', 'period')->orderByDesc('period')->pluck('period', 'id');
+
+        // office_code & akad_code berada di financing_accounts (bukan financing_account_periods);
+        // sumber sama dengan ClassifyPeriodDataJob — Ref: PRD Bab 5
+        $periodFilter = $this->filterPeriode ?: $this->runPeriode;
+
+        $offices = FinancingAccount::query()
+            ->whereHas('accountPeriods', fn ($q) => $q->where('period', $periodFilter))
+            ->distinct()
+            ->orderBy('office_code')
+            ->pluck('office_code')
+            ->filter()
+            ->values();
+
+        $akadCodes = FinancingAccount::query()
+            ->whereHas('accountPeriods', fn ($q) => $q->where('period', $periodFilter))
+            ->distinct()
+            ->orderBy('akad_code')
+            ->pluck('akad_code')
+            ->filter()
+            ->values();
 
         $runLogs = [];
         if ($this->runPeriode !== '') {
@@ -403,21 +444,29 @@ class PdNetflowResultIndex extends Component
         $summaryRows = [];
         $summaryTotal = 0.0;
 
-        if ($this->filterPeriode !== '' && $this->filterUsageType !== '') {
+        $usageTypeValue = $this->filterUsageType !== '' ? (int) $this->filterUsageType : null;
+        $officeCodeValue = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCodeValue = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
+
+        if ($this->filterPeriode !== '' && $usageTypeValue !== null) {
             $detail = (new PdNetflowDetailService)->calculate(
                 $this->filterPeriode,
-                $this->filterUsageType,
-                null,
-                null,
+                $usageTypeValue,
+                $officeCodeValue,
+                $akadCodeValue,
             );
             $pdRates = PdNetflowResult::query()
                 ->where('calculation_period', $this->filterPeriode)
-                ->where('usage_type', (int) $this->filterUsageType)
+                ->where('usage_type', $usageTypeValue)
+                ->when($officeCodeValue !== null, fn ($q) => $q->where('office_code', $officeCodeValue))
+                ->when($akadCodeValue !== null, fn ($q) => $q->where('akad_code', $akadCodeValue))
                 ->get()
                 ->keyBy('from_bucket_id');
             $lgdRate = (float) (LgdExpectedRecoveriesResult::query()
                 ->where('calculation_period', $this->filterPeriode)
-                ->where('usage_type', (int) $this->filterUsageType)
+                ->where('usage_type', $usageTypeValue)
+                ->when($officeCodeValue !== null, fn ($q) => $q->where('office_code', $officeCodeValue))
+                ->when($akadCodeValue !== null, fn ($q) => $q->where('akad_code', $akadCodeValue))
                 ->where('is_all_account', true)
                 ->latest('id')
                 ->value('lgd_rate') ?? 0);
@@ -454,6 +503,8 @@ class PdNetflowResultIndex extends Component
             'results' => $results,
             'periods' => $periods,
             'usageTypes' => UsageType::cases(),
+            'offices' => $offices,
+            'akadCodes' => $akadCodes,
             'runLogs' => $runLogs,
             'summaryRows' => $summaryRows,
             'summaryTotal' => $summaryTotal,

@@ -54,6 +54,8 @@ class PdNetflowPivotExportJob implements ShouldQueue
         private readonly int $exportJobId,
         private readonly string $calculationPeriod,
         private readonly ?string $usageType,
+        private readonly ?string $officeCode = null,
+        private readonly ?string $akadCode = null,
     ) {}
 
     /**
@@ -88,8 +90,8 @@ class PdNetflowPivotExportJob implements ShouldQueue
                 $datasets[$title] = (new PdNetflowDetailService)->calculate(
                     $this->calculationPeriod,
                     $usageType,
-                    null,
-                    null,
+                    $this->officeCode,
+                    $this->akadCode,
                 );
             }
 

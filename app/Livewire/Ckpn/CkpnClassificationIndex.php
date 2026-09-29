@@ -197,6 +197,16 @@ class CkpnClassificationIndex extends Component
         $this->resetPage();
     }
 
+    public function updatedFilterOfficeCode(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedFilterAkadCode(): void
+    {
+        $this->resetPage();
+    }
+
     public function updatedFilterClassification(): void
     {
         $this->resetPage();
@@ -232,7 +242,7 @@ class CkpnClassificationIndex extends Component
         $periods = CkpnPeriod::select('period')->orderByDesc('period')->pluck('period')->unique();
         $usageTypes = UsageType::cases();
         $classificationTypes = ClassificationType::cases();
-        $offices = FinancingOffice::select('office_code', 'office_name')->orderBy('office_code')->get();
+        $offices = FinancingOffice::select('code as office_code', 'name as office_name')->orderBy('code')->get();
         $akadCodes = CkpnPeriodClassification::select('akad_code')->distinct()->whereNotNull('akad_code')->pluck('akad_code')->sort()->values();
 
         $totalOutstanding = $this->showTable

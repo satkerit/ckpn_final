@@ -9,6 +9,7 @@ use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Enums\CalculationMethodKey;
 use App\Models\Bucket;
 use App\Models\CalculationDataRange;
+use App\Repositories\AkadCalculationRulesRepository;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -44,9 +45,9 @@ final class PdNetflowDetailService
      * Window ini menentukan berapa bulan ke belakang data outstanding diambil dari
      * financing_account_periods untuk menghitung transition rate dan compound rate.
      *
-     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
-     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
-     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
+     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan window, minimum 1
      */
     private function windowMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
@@ -70,9 +71,9 @@ final class PdNetflowDetailService
      * Default       : 12 bulan (1 tahun ke depan dari calculationPeriod)
      * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
-     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
-     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
+     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan proyeksi ke depan
      */
     private function forwardMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
@@ -97,9 +98,9 @@ final class PdNetflowDetailService
      * Default       : 'rolling'
      * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
-     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
-     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
+     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); null = semua akad
      * @return string 'rolling' atau 'full'
      */
     private function projectionMethod(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): string
@@ -123,9 +124,9 @@ final class PdNetflowDetailService
      * Default       : sama dengan windowMonths() jika parameter tidak diset
      * Scope priority: (office+usage+akad) > (usage+akad) > (usage) > all-account
      *
-     * @param  string|null  $usageType    Nilai integer UsageType sebagai string; null = all-account
-     * @param  string|null  $officeCode   Kode kantor (level 1 segmentasi); null = semua kantor
-     * @param  string|null  $akadCode     Kode akad (level 2 segmentasi); null = semua akad
+     * @param  string|null  $usageType  Nilai integer UsageType sebagai string; null = all-account
+     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); null = semua kantor
+     * @param  string|null  $akadCode  Kode akad (level 2 segmentasi); null = semua akad
      * @return int Jumlah bulan lookback
      */
     private function projectionLookbackMonths(?string $usageType, ?string $officeCode = null, ?string $akadCode = null): int
@@ -223,10 +224,15 @@ final class PdNetflowDetailService
         // Agregasi outstanding per bucket per periode dari historical
         // Baseline khusus PD Netflow: stsrec A atau W, POKPBY 03 hanya jika JTP.
         // Ref: AGENTS.md §4 — raw query builder untuk agregasi berat
+        // Resolve field per akad
+        $repo = new AkadCalculationRulesRepository;
+        $field = $akadCode ? $repo->getCalculationField($akadCode) : 'outstanding_balance';
+
+        // Main query: aggregate per bucket+period
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
-                ->join('buckets as b', function ($join) {
+                ->leftJoin('buckets as b', function ($join): void {
                     $join->whereRaw('fap.tgkhari >= b.min_days_overdue')
                         ->whereRaw('fap.tgkhari <= b.max_days_overdue');
                 })
@@ -238,7 +244,7 @@ final class PdNetflowDetailService
             ->select(
                 'fap.period',
                 'b.id as bucket_id',
-                DB::raw('SUM(fap.outstanding_balance) as total_outstanding')
+                DB::raw("SUM(CAST(fap.{$field} AS DECIMAL(20,2))) as total_outstanding")
             )
             ->groupBy('fap.period', 'b.id')
             ->get();
@@ -249,8 +255,7 @@ final class PdNetflowDetailService
             $outstanding[$row->bucket_id][$row->period] = (float) $row->total_outstanding;
         }
 
-        // Fallback: bucket terakhir untuk tgkhari di luar rentang semua bucket
-        // (baseline sama dengan query utama agar nominal penuh konsisten)
+        // Overflow fallback: tgkhari outside all bucket ranges
         $lastBucket = $buckets->last();
         $overflowRows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
@@ -267,7 +272,7 @@ final class PdNetflowDetailService
         )
             ->select(
                 'fap.period',
-                DB::raw('SUM(fap.outstanding_balance) as total_outstanding')
+                DB::raw("SUM(CAST(fap.{$field} AS DECIMAL(20,2))) as total_outstanding")
             )
             ->groupBy('fap.period')
             ->get();

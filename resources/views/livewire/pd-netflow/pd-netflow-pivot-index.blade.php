@@ -37,6 +37,24 @@
                     @endforeach
                 </select>
             </div>
+            <div class="sm:w-48">
+                <label class="mb-1 block text-xs font-medium text-zinc-400">Kantor (Level 1)</label>
+                <select wire:model="filterOfficeCode" class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                    <option value="">Semua Kantor</option>
+                    @foreach($offices as $office)
+                        <option value="{{ $office }}">{{ $office }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="sm:w-48">
+                <label class="mb-1 block text-xs font-medium text-zinc-400">Akad (Level 2)</label>
+                <select wire:model="filterAkadCode" class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                    <option value="">Semua Akad</option>
+                    @foreach($akadCodes as $akad)
+                        <option value="{{ $akad }}">{{ $akad }}</option>
+                    @endforeach
+                </select>
+            </div>
             <div class="flex gap-2 items-center flex-wrap">
                 @if($filterPeriode !== '')
                     @if(! $hasSnapshot)

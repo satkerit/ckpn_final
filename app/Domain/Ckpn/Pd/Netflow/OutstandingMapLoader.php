@@ -6,6 +6,7 @@ namespace App\Domain\Ckpn\Pd\Netflow;
 
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Models\Bucket;
+use App\Repositories\AkadCalculationRulesRepository;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -31,12 +32,19 @@ final class OutstandingMapLoader
     public static function load(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
     {
         $lastBucketId = Bucket::orderByDesc('bucket_order')->value('id');
+        $repo = new AkadCalculationRulesRepository;
+
+        // Map akad → field; default outstanding_balance
+        $fieldMap = [];
+        if ($akadCodes && count($akadCodes) > 0) {
+            foreach ($akadCodes as $akadCode) {
+                $fieldMap[$akadCode] = $repo->getCalculationField($akadCode);
+            }
+        }
 
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
-                // LEFT JOIN + COALESCE: baris tak cocok ke rentang bucket mana pun
-                // masuk bucket terakhir (fallback, konsisten dengan perilaku PHP lama)
                 ->leftJoin('buckets as b', function ($join): void {
                     $join->whereRaw('fap.tgkhari >= b.min_days_overdue')
                         ->whereRaw('fap.tgkhari <= b.max_days_overdue');
@@ -48,13 +56,15 @@ final class OutstandingMapLoader
         )
             ->select(
                 'fap.period',
+                'fa.akad_code',
                 $lastBucketId !== null
                     ? DB::raw("COALESCE(b.id, {$lastBucketId}) as bucket_id")
                     : 'b.id as bucket_id',
-                DB::raw('SUM(fap.outstanding_balance) as total_outstanding'),
+                DB::raw('SUM(fap.outstanding_balance) as outstanding_balance'),
+                DB::raw('SUM(fap.tgkmdl) as tgkmdl'),
                 DB::raw('COUNT(*) as row_count'),
             )
-            ->groupBy('fap.period', 'b.id')
+            ->groupBy('fap.period', 'fa.akad_code', 'b.id')
             ->get();
 
         $map = [];
@@ -62,7 +72,11 @@ final class OutstandingMapLoader
 
         foreach ($rows as $row) {
             $bucketId = (int) $row->bucket_id;
-            $map[$row->period][$bucketId] = (float) ($row->total_outstanding ?? 0.0);
+            // Pilih field berdasarkan akad, default outstanding_balance
+            $field = $fieldMap[$row->akad_code] ?? 'outstanding_balance';
+            $total = (float) ($row->{$field} ?? 0.0);
+
+            $map[$row->period][$bucketId] = ($map[$row->period][$bucketId] ?? 0.0) + $total;
             $rowCount += (int) $row->row_count;
         }
 
@@ -83,6 +97,14 @@ final class OutstandingMapLoader
     public static function loadDetailed(int $usageTypeValue, array $periods, ?array $akadCodes = null, ?string $officeCode = null): array
     {
         $lastBucketId = Bucket::orderByDesc('bucket_order')->value('id');
+        $repo = new AkadCalculationRulesRepository;
+
+        $fieldMap = [];
+        if ($akadCodes && count($akadCodes) > 0) {
+            foreach ($akadCodes as $akadCode) {
+                $fieldMap[$akadCode] = $repo->getCalculationField($akadCode);
+            }
+        }
 
         $rows = PdNetflowBaseline::apply(
             DB::table('financing_account_periods as fap')
@@ -103,7 +125,8 @@ final class OutstandingMapLoader
                 $lastBucketId !== null
                     ? DB::raw("COALESCE(b.id, {$lastBucketId}) as bucket_id")
                     : 'b.id as bucket_id',
-                DB::raw('SUM(fap.outstanding_balance) as total_outstanding'),
+                DB::raw('SUM(fap.outstanding_balance) as outstanding_balance'),
+                DB::raw('SUM(fap.tgkmdl) as tgkmdl'),
             )
             ->groupBy('fap.period', 'fa.office_code', 'fa.akad_code', 'b.id')
             ->get();
@@ -115,7 +138,9 @@ final class OutstandingMapLoader
             $akadCode = $row->akad_code ?? 'all';
             $bucketId = (int) $row->bucket_id;
             $period = $row->period;
-            $outstanding = (float) ($row->total_outstanding ?? 0.0);
+
+            $field = $fieldMap[$akadCode] ?? 'outstanding_balance';
+            $outstanding = (float) ($row->{$field} ?? 0.0);
 
             $detail[$officeCode][$akadCode][$bucketId][$period] = $outstanding;
         }

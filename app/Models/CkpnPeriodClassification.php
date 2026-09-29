@@ -34,6 +34,8 @@ class CkpnPeriodClassification extends Model
         'financing_status',
         'writeoff_status',
         'usage_type',
+        'office_code',
+        'akad_code',
         'classification_reason',
         'ckpn_period_id',
     ];

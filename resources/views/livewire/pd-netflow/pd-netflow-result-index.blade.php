@@ -33,6 +33,28 @@
                     </select>
                 </div>
 
+                <div class="sm:w-48">
+                    <label class="mb-1 block text-xs font-medium text-zinc-400">Kantor (Level 1)</label>
+                    <select wire:model.live="filterOfficeCode"
+                            class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                        <option value="">Semua Kantor</option>
+                        @foreach($offices as $office)
+                            <option value="{{ $office }}">{{ $office }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
+                <div class="sm:w-48">
+                    <label class="mb-1 block text-xs font-medium text-zinc-400">Akad (Level 2)</label>
+                    <select wire:model.live="filterAkadCode"
+                            class="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-200 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                        <option value="">Semua Akad</option>
+                        @foreach($akadCodes as $akad)
+                            <option value="{{ $akad }}">{{ $akad }}</option>
+                        @endforeach
+                    </select>
+                </div>
+
                 {{-- Tombol: muncul setelah dropdown jenis penggunaan tampil (periode sudah dipilih) --}}
                 <div class="flex flex-wrap items-center gap-2">
                         @if(! $runPeriodeHasResult)
@@ -112,7 +134,7 @@
         <input
             type="text"
             wire:model.live.debounce.300ms="search"
-            placeholder="Cari periode, jenis penggunaan..."
+            placeholder="Cari periode, jenis penggunaan, kantor, akad..."
             class="w-full sm:w-64 px-3 py-1.5 text-sm border border-zinc-700 bg-zinc-800 text-zinc-100 rounded-lg shadow-sm focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
         />
     </div>
@@ -208,6 +230,8 @@
                 <thead class="bg-zinc-800">
                     <tr>
                         <th class="px-4 py-3 text-left text-xs font-semibold text-zinc-400">Periode</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-zinc-400">Kantor</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-zinc-400">Akad</th>
                         <th class="px-4 py-3 text-left text-xs font-semibold text-zinc-400">Jenis Penggunaan</th>
                         <th class="px-4 py-3 text-left text-xs font-semibold text-zinc-400">Bucket Asal</th>
                         <th class="px-4 py-3 text-right text-xs font-semibold text-zinc-400">PD Rate</th>
@@ -231,6 +255,8 @@
                         @endphp
                         <tr class="hover:bg-zinc-800/50 transition-colors">
                             <td class="px-4 py-3 font-mono text-zinc-100">{{ $row->calculation_period }}</td>
+                            <td class="px-4 py-3 text-zinc-300">{{ $row->office_code ?? '-' }}</td>
+                            <td class="px-4 py-3 text-zinc-300">{{ $row->akad_code ?? '-' }}</td>
                             <td class="px-4 py-3 text-zinc-300">{{ $row->usage_type?->label() ?? '-' }}</td>
                             <td class="px-4 py-3 text-zinc-300">{{ $row->fromBucket?->label ?? '-' }}</td>
                             <td class="px-4 py-3 text-right font-mono text-zinc-100">

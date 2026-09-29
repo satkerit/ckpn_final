@@ -121,6 +121,26 @@
                     @endforeach
                 </select>
             </div>
+            <div class="w-full sm:w-48">
+                <label class="mb-1.5 block text-xs font-medium text-zinc-400">Kantor (Level 1)</label>
+                <select wire:model.live="filterOfficeCode"
+                        class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                    <option value="">Semua Kantor</option>
+                    @foreach($offices as $office)
+                        <option value="{{ $office->office_code }}">{{ $office->office_code }} — {{ $office->office_name }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="w-full sm:w-48">
+                <label class="mb-1.5 block text-xs font-medium text-zinc-400">Akad (Level 2)</label>
+                <select wire:model.live="filterAkadCode"
+                        class="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-100 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500">
+                    <option value="">Semua Akad</option>
+                    @foreach($akadCodes as $akad)
+                        <option value="{{ $akad }}">{{ $akad }}</option>
+                    @endforeach
+                </select>
+            </div>
             <div class="w-full sm:w-44">
                 <label class="mb-1.5 block text-xs font-medium text-zinc-400">Klasifikasi</label>
                 <select wire:model.live="filterClassification"
@@ -131,9 +151,9 @@
                     @endforeach
                 </select>
             </div>
-            @if($filterPeriode || $filterUsageType || $filterClassification)
+            @if($filterPeriode || $filterUsageType || $filterClassification || $filterOfficeCode || $filterAkadCode)
                 <div class="flex items-end pb-1">
-                    <button wire:click="$set('filterPeriode',''); $set('filterUsageType',''); $set('filterClassification','');"
+                    <button wire:click="$set('filterPeriode',''); $set('filterUsageType',''); $set('filterClassification',''); $set('filterOfficeCode',''); $set('filterAkadCode','');"
                             class="inline-flex h-10 items-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-medium text-zinc-400 shadow-sm transition hover:bg-zinc-800/50">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -160,6 +180,8 @@
                 <thead class="bg-zinc-800/50">
                     <tr>
                         <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold text-zinc-400">Periode</th>
+                        <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold text-zinc-400">Kantor</th>
+                        <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold text-zinc-400">Akad</th>
                         <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold text-zinc-400">Nama Debitur</th>
                         <th class="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold text-zinc-400">Jenis Penggunaan</th>
                         <th class="whitespace-nowrap px-4 py-3 text-center text-xs font-semibold text-zinc-400">Klasifikasi</th>
@@ -180,6 +202,8 @@
                         @endphp
                         <tr class="transition-colors hover:bg-zinc-800/50">
                             <td class="whitespace-nowrap px-4 py-3 font-mono text-zinc-100">{{ $row->period }}</td>
+                            <td class="whitespace-nowrap px-4 py-3 text-zinc-300">{{ $row->office_code ?? '-' }}</td>
+                            <td class="whitespace-nowrap px-4 py-3 text-zinc-300">{{ $row->akad_code ?? '-' }}</td>
                             <td class="px-4 py-3 text-zinc-300">{{ $row->financingAccount?->customer_name ?? '-' }}</td>
                             <td class="whitespace-nowrap px-4 py-3 text-zinc-400">{{ $row->usage_type?->label() ?? '-' }}</td>
                             <td class="px-4 py-3 text-center">
@@ -241,19 +265,6 @@
             <div class="mt-5 flex gap-2">
                 <button wire:click="$set('confirmingAction', '')" class="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-4 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-700/60">Batal</button>
                 <button wire:click="klasifikasikan" class="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white transition hover:bg-blue-500">Ya, Klasifikasikan</button>
-            </div>
-        </div>
-    </div>
-
-    {{-- Modal Konfirmasi Hitung CKPN Individual --}}
-    <div x-show="$wire.confirmingAction === 'hitung'" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" wire:click="$set('confirmingAction', '')"></div>
-        <div class="relative w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
-            <h3 class="text-sm font-semibold text-zinc-100">Konfirmasi Perhitungan</h3>
-            <p class="mt-2 text-xs text-zinc-400">Yakin ingin menjalankan perhitungan CKPN Individual untuk periode ini? Proses akan dimasukkan ke antrean.</p>
-            <div class="mt-5 flex gap-2">
-                <button wire:click="$set('confirmingAction', '')" class="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/80 px-4 py-2 text-xs font-medium text-zinc-300 transition hover:bg-zinc-700/60">Batal</button>
-                <button wire:click="hitungCkpnIndividual" class="flex-1 rounded-lg bg-amber-600 px-4 py-2 text-xs font-medium text-white transition hover:bg-amber-500">Ya, Hitung</button>
             </div>
         </div>
     </div>

@@ -1,70 +1,37 @@
-# CLAUDE.md
+# CLAUDE.md — Instruksi Agent untuk Sistem CKPN (Laravel 13 + Filament 4)
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+## ⚠️ Aturan Non-Negotiable #1: Konfirmasi Sebelum Operasi Berisiko Kehilangan Data
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+Sebelum menjalankan **atau menyusun** perubahan apa pun yang berpotensi menghapus/menimpa data — di database, file, maupun repository — kamu **wajib meminta konfirmasi eksplisit dari user dan berhenti sampai disetujui**. Tidak ada pengecualian, meskipun perubahan terlihat kecil.
 
-## 1. Think Before Coding
+Contoh operasi yang wajib konfirmasi (daftar lengkap di `AGENTS.md` Bab 13.1):
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+- DDL destruktif: `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, perubahan kolom yang berisiko kehilangan nilai.
+- DML penghapusan: `DELETE` massal, `Model::truncate()`, hard delete yang menggantikan soft delete.
+- Artisan destruktif: `migrate:fresh`, `migrate:refresh`, `db:wipe`, reset seeder yang menimpa data existing.
+- Snapshot CKPN: hapus/timpa `pd_netflow_result`, `pd_migration_result`, `lgd_*_result`, `ckpn_*_result`, atau tabel master (PRD Bab 15).
+- Queue/Job: `queue:flush`, `queue:clear`, pembatalan batch perhitungan.
+- File data: hapus/overwrite file di `storage/app`, `rm -rf` di luar target eksplisit.
+- Repository: `git reset --hard`, `git clean -fd`, `git push --force`.
 
-Before implementing:
+Format konfirmasi sebelum eksekusi (lalu tunggu jawaban user): (1) **Aksi** — perintah persis yang dijalankan, (2) **Dampak** — tabel/file/rentang data terdampak + jumlah baris bila bisa dihitung, (3) **Reversibility** — bisa di-rollback atau permanen, (4) pertanyaan eksplisit "Lanjutkan?".
 
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+## Standar Kerja Lengkap
 
-## 2. Simplicity First
+Seluruh standar kerja mengacu pada **`AGENTS.md`** (sumber kebenaran tunggal — jangan duplikasi isinya di sini):
 
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+- Prinsip kerja & efisiensi token → `AGENTS.md` Bab 1
+- Tech stack & versi → `AGENTS.md` Bab 2
+- Struktur direktori domain CKPN → `AGENTS.md` Bab 3
+- Standar koding Laravel → `AGENTS.md` Bab 4
+- Konvensi Filament 4 → `AGENTS.md` Bab 5
+- Referensi domain (detail di `PRD.md`) → `AGENTS.md` Bab 6
+- Testing → `AGENTS.md` Bab 7
+- Git & commit → `AGENTS.md` Bab 8
+- Larangan (Do Not) → `AGENTS.md` Bab 9
+- Update `PROGRESS.md` & dokumentasi → `AGENTS.md` Bab 12
+- Kebijakan konfirmasi operasi destruktif → `AGENTS.md` Bab 13
 
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+_Dokumen ini hanya pointer ke `AGENTS.md`. Jika ada konflik, `AGENTS.md` yang berlaku; aturan bisnis/formula mengikuti `PRD.md`._

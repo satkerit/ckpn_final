@@ -215,17 +215,19 @@ class CalculationParameterIndex extends Component
             'notes' => $this->colNotes ?: null,
         ];
 
-        // Ref: PRD Bab 15 — (method, pokpby_code) unik per baris konfigurasi.
-        // updateOrCreate mencegah UniqueConstraintViolation 'uq_column_config_method_pokpby'
-        // saat user menambahkan kombinasi method+pokpby yang sudah ada.
         try {
-            CalculationColumnConfig::updateOrCreate(
-                ['method' => $data['method'], 'pokpby_code' => $data['pokpby_code']],
-                collect($data)->except(['method', 'pokpby_code'])->all(),
-            );
-            $this->flashMessage = $this->editingColumnConfigId !== null
-                ? 'Konfigurasi kolom berhasil diperbarui.'
-                : 'Konfigurasi kolom berhasil disimpan (kombinasi method + POKPBY sudah ada sebelumnya, diperbarui).';
+            if ($this->editingColumnConfigId !== null) {
+                // Edit: update record yang dipilih
+                CalculationColumnConfig::findOrFail($this->editingColumnConfigId)->update($data);
+                $this->flashMessage = 'Konfigurasi kolom berhasil diperbarui.';
+            } else {
+                // Tambah: updateOrCreate mencegah duplicate (method, pokpby_code) unik
+                CalculationColumnConfig::updateOrCreate(
+                    ['method' => $data['method'], 'pokpby_code' => $data['pokpby_code']],
+                    collect($data)->except(['method', 'pokpby_code'])->all(),
+                );
+                $this->flashMessage = 'Konfigurasi kolom baru berhasil ditambahkan.';
+            }
         } catch (Throwable $e) {
             $this->flashMessage = 'Gagal menyimpan konfigurasi kolom: '.$e->getMessage();
             $this->flashType = 'error';

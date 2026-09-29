@@ -103,21 +103,14 @@ class PdMigrationCalculationJob implements ShouldQueue
                 default: 12,
             );
 
-            // Matrix count = ceil(lookback_months / 3) — setiap matriks span 3 bulan mundur
-            $matrixCount = (int) ceil($lookbackMonths / 3);
-
-            // Legacy fallback: jika pd_migration_matrix_count explicit set, pakai itu (backward compat)
-            $matrixCountLegacy = (int) CalculationDataRange::resolveValue(
+            $matrixCount = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::PdMigration,
                 'pd_migration_matrix_count',
                 officeCode: $this->officeCode,
                 usageType: (int) $this->usageType,
                 akadCode: $this->akadCode,
                 default: null,
-            );
-            if ($matrixCountLegacy !== null) {
-                $matrixCount = $matrixCountLegacy;
-            }
+            ) ?? 12;
 
             $builder = new MigrationMatrixBuilder;
             $calculator = new PdMigrationCalculator($builder, $matrixCount);

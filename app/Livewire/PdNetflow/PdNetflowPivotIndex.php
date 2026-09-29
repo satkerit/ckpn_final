@@ -9,6 +9,7 @@ use App\Jobs\PdNetflowPivotExportJob;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
 use App\Models\ExportJob;
+use App\Models\FinancingAccount;
 use App\Models\PdNetflowCalculationHistory;
 use App\Models\PdNetflowResult;
 use App\Services\PdNetflowDetailService;
@@ -29,6 +30,12 @@ class PdNetflowPivotIndex extends Component
 
     #[Url(as: 'usage_type')]
     public string $filterUsageType = '';
+
+    #[Url(as: 'office_code')]
+    public string $filterOfficeCode = '';
+
+    #[Url(as: 'akad_code')]
+    public string $filterAkadCode = '';
 
     // Data section outstanding
     public array $outstandingPeriods = [];
@@ -84,7 +91,7 @@ class PdNetflowPivotIndex extends Component
         $this->checkSnapshot();
     }
 
-    /** Cek apakah sudah ada snapshot tersimpan untuk kombinasi periode + usage_type. */
+    /** Cek apakah sudah ada snapshot tersimpan untuk kombinasi periode + usage_type + office_code + akad_code. */
     private function checkSnapshot(): void
     {
         if ($this->filterPeriode === '') {
@@ -94,6 +101,8 @@ class PdNetflowPivotIndex extends Component
         }
 
         $usageTypeValue = $this->filterUsageType !== '' ? (int) $this->filterUsageType : null;
+        $officeCode = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCode = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
 
         $this->hasSnapshot = PdNetflowCalculationHistory::query()
             ->where('calculation_period', $this->filterPeriode)
@@ -101,6 +110,16 @@ class PdNetflowPivotIndex extends Component
                 $usageTypeValue !== null,
                 fn ($q) => $q->where('usage_type', $usageTypeValue),
                 fn ($q) => $q->whereNull('usage_type'),
+            )
+            ->when(
+                $officeCode !== null,
+                fn ($q) => $q->where('office_code', $officeCode),
+                fn ($q) => $q->whereNull('office_code'),
+            )
+            ->when(
+                $akadCode !== null,
+                fn ($q) => $q->where('akad_code', $akadCode),
+                fn ($q) => $q->whereNull('akad_code'),
             )
             ->exists();
     }
@@ -126,14 +145,15 @@ class PdNetflowPivotIndex extends Component
         ]);
     }
 
-    /**
-     * Load pivot dari snapshot DB tanpa hitung ulang.
+    /** Load pivot dari snapshot DB tanpa hitung ulang.
      * Dipanggil saat hasSnapshot = true dan user klik "Tampilkan".
      */
     public function loadFromSnapshot(): void
     {
         $this->errorMessage = '';
         $usageTypeValue = $this->filterUsageType !== '' ? (int) $this->filterUsageType : null;
+        $officeCode = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCode = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
 
         $history = PdNetflowCalculationHistory::query()
             ->where('calculation_period', $this->filterPeriode)
@@ -141,6 +161,16 @@ class PdNetflowPivotIndex extends Component
                 $usageTypeValue !== null,
                 fn ($q) => $q->where('usage_type', $usageTypeValue),
                 fn ($q) => $q->whereNull('usage_type'),
+            )
+            ->when(
+                $officeCode !== null,
+                fn ($q) => $q->where('office_code', $officeCode),
+                fn ($q) => $q->whereNull('office_code'),
+            )
+            ->when(
+                $akadCode !== null,
+                fn ($q) => $q->where('akad_code', $akadCode),
+                fn ($q) => $q->whereNull('akad_code'),
             )
             ->latest()
             ->first();
@@ -182,12 +212,16 @@ class PdNetflowPivotIndex extends Component
             return;
         }
 
+        $usageType = $this->filterUsageType === 'all' ? null : $this->filterUsageType;
+        $officeCode = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCode = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
+
         $service = new PdNetflowDetailService;
         $result = $service->calculate(
             $this->filterPeriode,
-            $this->filterUsageType === 'all' ? null : $this->filterUsageType,
-            null,
-            null,
+            $usageType,
+            $officeCode,
+            $akadCode,
         );
 
         $this->outstandingPeriods = $result['outstanding_periods'];
@@ -203,15 +237,19 @@ class PdNetflowPivotIndex extends Component
         $this->dataLoaded = true;
 
         // Simpan / timpa snapshot agar "Tampilkan" tidak perlu hitung ulang. Ref: PRD Bab 7
-        $usageTypeValue = $this->filterUsageType !== 'all' ? (int) $this->filterUsageType : null;
+        $usageTypeValue = $usageType !== null ? (int) $usageType : null;
         PdNetflowCalculationHistory::updateOrCreate(
             [
                 'calculation_period' => $this->filterPeriode,
                 'usage_type' => $usageTypeValue,
+                'office_code' => $officeCode,
+                'akad_code' => $akadCode,
                 // simpan ke run_log dummy (id=0) untuk pivot on-the-fly (bukan job batch)
                 'calculation_run_log_id' => CalculationRunLog::query()
                     ->where('period', $this->filterPeriode)
                     ->where('usage_type', $usageTypeValue)
+                    ->when($officeCode !== null, fn ($q) => $q->where('office_code', $officeCode))
+                    ->when($akadCode !== null, fn ($q) => $q->where('akad_code', $akadCode))
                     ->latest()
                     ->value('id') ?? 0,
             ],
@@ -232,7 +270,7 @@ class PdNetflowPivotIndex extends Component
         $this->confirmingAction = 'delete_snapshot';
     }
 
-    /** Hapus snapshot dari DB untuk periode + usage_type yang dipilih. */
+    /** Hapus snapshot dari DB untuk periode + usage_type + office_code + akad_code yang dipilih. */
     public function deleteSnapshot(): void
     {
         $this->authorize('deleteAny', PdNetflowResult::class);
@@ -241,6 +279,8 @@ class PdNetflowPivotIndex extends Component
         $usageTypeValue = $this->filterUsageType !== '' && $this->filterUsageType !== 'all'
             ? (int) $this->filterUsageType
             : null;
+        $officeCode = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCode = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
 
         PdNetflowCalculationHistory::query()
             ->where('calculation_period', $this->filterPeriode)
@@ -248,6 +288,16 @@ class PdNetflowPivotIndex extends Component
                 $usageTypeValue !== null,
                 fn ($q) => $q->where('usage_type', $usageTypeValue),
                 fn ($q) => $q->whereNull('usage_type'),
+            )
+            ->when(
+                $officeCode !== null,
+                fn ($q) => $q->where('office_code', $officeCode),
+                fn ($q) => $q->whereNull('office_code'),
+            )
+            ->when(
+                $akadCode !== null,
+                fn ($q) => $q->where('akad_code', $akadCode),
+                fn ($q) => $q->whereNull('akad_code'),
             )
             ->delete();
 
@@ -270,6 +320,8 @@ class PdNetflowPivotIndex extends Component
         }
 
         $usageType = $this->filterUsageType === 'all' ? null : $this->filterUsageType;
+        $officeCode = $this->filterOfficeCode !== '' ? $this->filterOfficeCode : null;
+        $akadCode = $this->filterAkadCode !== '' ? $this->filterAkadCode : null;
 
         $exportJob = ExportJob::create([
             'type' => 'pd_netflow_pivot',
@@ -277,6 +329,8 @@ class PdNetflowPivotIndex extends Component
             'params' => [
                 'period' => $this->filterPeriode,
                 'usage_type' => $usageType,
+                'office_code' => $officeCode,
+                'akad_code' => $akadCode,
             ],
         ]);
 
@@ -284,6 +338,8 @@ class PdNetflowPivotIndex extends Component
             $exportJob->id,
             $this->filterPeriode,
             $usageType,
+            $officeCode,
+            $akadCode,
         )->onQueue('ckpn-calculation');
 
         $this->exportJobId = $exportJob->id;
@@ -311,11 +367,33 @@ class PdNetflowPivotIndex extends Component
 
     public function render(): View
     {
+        $periods = CkpnPeriod::query()
+            ->orderByDesc('period')
+            ->pluck('period');
+
+        // office_code & akad_code berada di financing_accounts (bukan financing_account_periods);
+        // sumber sama dengan ClassifyPeriodDataJob — Ref: PRD Bab 5
+        $offices = FinancingAccount::query()
+            ->whereHas('accountPeriods', fn ($q) => $q->where('period', $this->filterPeriode))
+            ->distinct()
+            ->orderBy('office_code')
+            ->pluck('office_code')
+            ->filter()
+            ->values();
+
+        $akadCodes = FinancingAccount::query()
+            ->whereHas('accountPeriods', fn ($q) => $q->where('period', $this->filterPeriode))
+            ->distinct()
+            ->orderBy('akad_code')
+            ->pluck('akad_code')
+            ->filter()
+            ->values();
+
         return view('livewire.pd-netflow.pd-netflow-pivot-index', [
-            'periods' => CkpnPeriod::query()
-                ->orderByDesc('period')
-                ->pluck('period'),
+            'periods' => $periods,
             'usageTypes' => UsageType::cases(),
+            'offices' => $offices,
+            'akadCodes' => $akadCodes,
         ]);
     }
 }

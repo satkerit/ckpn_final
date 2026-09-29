@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Pd\Migration;
 
+use App\Domain\Ckpn\Services\AkadCalculationRulesRepository;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
 use App\Models\FinancingAccountPeriod;
@@ -20,6 +21,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class MigrationMatrixBuilder
 {
+    public function __construct(
+        private readonly AkadCalculationRulesRepository $akadRulesRepository,
+    ) {}
+
     /**
      * Bangun baris matriks migrasi detail (dengan outstanding) untuk satu cohort triwulanan.
      * Ref: PRD Bab 8.3 Langkah 2–3
@@ -177,6 +182,8 @@ final class MigrationMatrixBuilder
      */
     private function gradeOutstandingFromPeriods(UsageType $usageType, string $period, ?array $akadCodes, string $officeCode, ?string $akadCode = null): array
     {
+        $field = $this->akadRulesRepository->resolveField($period, $officeCode, $akadCode);
+
         $rows = AkadEligibilityService::restrict(
             DB::table('financing_account_periods as fap')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
@@ -194,7 +201,7 @@ final class MigrationMatrixBuilder
                                 ->whereRaw("fap.maturity_date <= LAST_DAY(STR_TO_DATE(CONCAT(fap.period, '01'), '%Y%m%d'))");
                         });
                 })
-                ->selectRaw('qg.id as quality_grade_id, SUM(fap.outstanding_balance) as total'),
+                ->selectRaw("qg.id as quality_grade_id, SUM(fap.{$field}) as total"),
             $akadCodes,
             'fa.akad_code',
         )

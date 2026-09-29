@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Lgd\ExpectedRecoveries;
 
 use App\Domain\Ckpn\Lgd\Contracts\LgdCalculationMethodInterface;
+use App\Domain\Ckpn\Services\AkadCalculationRulesRepository;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +27,7 @@ use Illuminate\Support\Facades\DB;
 final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInterface
 {
     public function __construct(
+        private readonly AkadCalculationRulesRepository $akadRulesRepository,
         private readonly int $windowYears = 5,
         private readonly bool $useAllAccount = false,
     ) {}
@@ -108,13 +110,15 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
         $totalWriteoff = (float) array_sum($writeoffByYear);
         $totalRecovery = (float) array_sum($recoveryByYear);
 
-        $lgdRate = $totalWriteoff > 0
-            ? max(0.0, min(($totalWriteoff - $totalRecovery) / $totalWriteoff, 1.0))
+        $expectedRecoveryRate = $totalWriteoff > 0
+            ? max(0.0, min($totalRecovery / $totalWriteoff, 1.0))
             : 0.0;
+
+        $lgdRate = 1.0 - $expectedRecoveryRate;
 
         return [
             'lgd_rate' => $lgdRate,
-            'expected_recovery_rate' => $lgdRate,
+            'expected_recovery_rate' => $expectedRecoveryRate,
             'total_writeoff' => array_sum($writeoffByYear),
             'total_recovery' => array_sum($recoveryByYear),
             'is_all_account' => $isAllAccount,
@@ -136,36 +140,35 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      */
     private function aggregateWriteoffByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null, ?string $akadCode = null): array
     {
-        // Sub-query: daftar akun WO pada periode perhitungan beserta writeoff_date-nya
-        // (writeoff_status NOT NULL = akun telah di-write off per periode tsb)
+        // Query: ambil akun WO dengan writeoff_date dalam window
+        // SUM field per akad (setiap akad bisa punya field berbeda)
+        // Hanya ambil dari writeoff sebelum periode perhitungan (Ref: PRD Bab 9.1)
         $query = AkadEligibilityService::restrict(
-            DB::table('financing_account_periods as fap_calc')
-                ->join('financing_accounts as fa', 'fa.id', '=', 'fap_calc.financing_account_id')
-                // join ke baris periode = DATE_FORMAT(writeoff_date, '%Y%m') untuk outstanding saat WO
-                ->joinSub(
-                    DB::table('financing_account_periods')
-                        ->select(['financing_account_id', 'period', 'outstanding_balance', 'writeoff_date', 'maturity_date']),
-                    'fap_wo',
-                    function ($join): void {
-                        $join->on('fap_wo.financing_account_id', '=', 'fap_calc.financing_account_id')
-                            ->whereRaw("fap_wo.period = DATE_FORMAT(fap_calc.writeoff_date, '%Y%m')");
-                    }
-                )
-                ->where('fap_calc.period', $calculationPeriod)
-                ->whereNotNull('fap_calc.writeoff_status')
-                ->whereNotNull('fap_calc.writeoff_date')
+            DB::table('financing_account_periods as fap_wo')
+                ->join('financing_accounts as fa', 'fa.id', '=', 'fap_wo.financing_account_id')
+                ->whereNotNull('fap_wo.writeoff_status')
+                ->whereNotNull('fap_wo.writeoff_date')
+                ->where('fap_wo.period', '<', $calculationPeriod)  // Only writeoff BEFORE calculation period
                 // Filter 5 tahun ke belakang dari periode perhitungan (Poin 2)
-                ->where('fap_calc.writeoff_date', '>=', $windowStartDate)
+                ->where('fap_wo.writeoff_date', '>=', $windowStartDate)
                 // Akad 03 hanya jika sudah JTP saat writeoff — Ref: PRD Bab 9
                 ->where(function ($q): void {
                     $q->where('fa.akad_code', '!=', '03')
                         ->orWhere(function ($q2): void {
                             $q2->where('fa.akad_code', '03')
                                 ->whereNotNull('fap_wo.maturity_date')
-                                ->whereRaw('fap_wo.maturity_date <= fap_calc.writeoff_date');
+                                ->whereRaw('fap_wo.maturity_date <= fap_wo.writeoff_date');
                         });
                 })
-                ->selectRaw('YEAR(fap_calc.writeoff_date) as year, SUM(fap_wo.outstanding_balance) as total'),
+                ->selectRaw("
+                    YEAR(fap_wo.writeoff_date) as year,
+                    fa.akad_code,
+                    CASE
+                        WHEN fa.akad_code = '01' THEN SUM(fap_wo.outstanding_balance)
+                        WHEN fa.akad_code = '05' THEN SUM(fap_wo.tgkmdl)
+                        ELSE SUM(fap_wo.outstanding_balance)
+                    END as total
+                "),
             $akadCodes,
             'fa.akad_code'
         );
@@ -174,21 +177,28 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
             $query->where('fa.usage_type', $usageType->value);
         }
 
-        // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
         if ($officeCode !== null) {
             $query->where('fa.office_code', $officeCode);
         }
 
-        // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
         if ($akadCode !== null) {
             $query->where('fa.akad_code', $akadCode);
         }
 
-        return $query->groupBy('year')
+        $results = $query->groupBy('year', 'fa.akad_code')
             ->orderBy('year')
-            ->pluck('total', 'year')
-            ->map(fn ($v) => (float) $v)
-            ->toArray();
+            ->get();
+
+        // Aggregate total per year (sum across akad)
+        $writeoffByYear = [];
+        foreach ($results as $row) {
+            $year = (string) $row->year;
+            $total = (float) $row->total;
+            $writeoffByYear[$year] = ($writeoffByYear[$year] ?? 0.0) + $total;
+        }
+
+        ksort($writeoffByYear);
+        return $writeoffByYear;
     }
 
     /**
@@ -205,18 +215,15 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
      */
     private function aggregateRecoveryByYear(?UsageType $usageType, string $calculationPeriod, string $windowStartDate, ?array $akadCodes = null, ?string $officeCode = null, ?string $akadCode = null): array
     {
-        // Step 1-3: ambil daftar akun WO pada periode perhitungan beserta outstanding saat WO
-        $writeoffQuery = AkadEligibilityService::restrict(
+        // Step 1-3: ambil akun WO pada periode perhitungan, join ke row WO-nya di periode writeoff
+        $query = AkadEligibilityService::restrict(
             DB::table('financing_account_periods as fap_calc')
                 ->join('financing_accounts as fa', 'fa.id', '=', 'fap_calc.financing_account_id')
-                // join ke baris periode = DATE_FORMAT(writeoff_date, '%Y%m') untuk outstanding saat WO
-                ->joinSub(
-                    DB::table('financing_account_periods')
-                        ->select(['financing_account_id', 'period', 'outstanding_balance', 'writeoff_date', 'maturity_date']),
-                    'fap_wo',
+                ->leftJoin(
+                    'financing_account_periods as fap_wo',
                     function ($join): void {
-                        $join->on('fap_wo.financing_account_id', '=', 'fap_calc.financing_account_id')
-                            ->whereRaw("fap_wo.period = DATE_FORMAT(fap_calc.writeoff_date, '%Y%m')");
+                        $join->on('fap_wo.financing_account_id', '=', 'fa.id')
+                            ->whereRaw('fap_wo.period = DATE_FORMAT(fap_calc.writeoff_date, "%Y%m")');
                     }
                 )
                 ->where('fap_calc.period', $calculationPeriod)
@@ -227,61 +234,63 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
                     $q->where('fa.akad_code', '!=', '03')
                         ->orWhere(function ($q2): void {
                             $q2->where('fa.akad_code', '03')
-                                ->whereNotNull('fap_wo.maturity_date')
-                                ->whereRaw('fap_wo.maturity_date <= fap_calc.writeoff_date');
+                                ->whereNotNull('fap_calc.maturity_date')
+                                ->whereRaw('fap_calc.maturity_date <= fap_calc.writeoff_date');
                         });
                 })
                 ->select([
                     'fap_calc.financing_account_id',
-                    DB::raw('YEAR(fap_calc.writeoff_date) as writeoff_year'),
-                    DB::raw('fap_wo.outstanding_balance as outstanding_writeoff'),
+                    'fap_calc.writeoff_date',
+                    'fa.akad_code',
+                    'fap_calc.outstanding_balance as current_outstanding_balance',
+                    'fap_calc.tgkmdl as current_tgkmdl',
+                    'fap_wo.outstanding_balance as wo_outstanding_balance',
+                    'fap_wo.tgkmdl as wo_tgkmdl',
                 ]),
             $akadCodes,
             'fa.akad_code'
         );
 
         if ($usageType !== null) {
-            $writeoffQuery->where('fa.usage_type', $usageType->value);
+            $query->where('fa.usage_type', $usageType->value);
         }
 
-        // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
         if ($officeCode !== null) {
-            $writeoffQuery->where('fa.office_code', $officeCode);
+            $query->where('fa.office_code', $officeCode);
         }
 
-        // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
         if ($akadCode !== null) {
-            $writeoffQuery->where('fa.akad_code', $akadCode);
+            $query->where('fa.akad_code', $akadCode);
         }
 
-        $writeoffAccounts = $writeoffQuery->get();
+        $accounts = $query->get();
 
-        if ($writeoffAccounts->isEmpty()) {
+        if ($accounts->isEmpty()) {
             return [];
         }
 
-        // Step 4a: ambil outstanding akun WO pada periode perhitungan (untuk hitung recovery)
-        $accountIds = $writeoffAccounts->pluck('financing_account_id')->unique()->toArray();
-        $currentOutstandingMap = DB::table('financing_account_periods')
-            ->whereIn('financing_account_id', $accountIds)
-            ->where('period', $calculationPeriod)
-            ->pluck('outstanding_balance', 'financing_account_id')
-            ->map(fn ($v) => (float) $v)
-            ->toArray();
-
         // Step 4b: hitung recovery per akun, kelompokkan per tahun writeoff
         $recoveryByYear = [];
-        foreach ($writeoffAccounts as $row) {
-            $year = (string) $row->writeoff_year;
-            $woOutstanding = (float) $row->outstanding_writeoff;
-            $currentOutstanding = $currentOutstandingMap[$row->financing_account_id] ?? 0.0;
-            // Jika tidak muncul di periode perhitungan → current = 0 → recovery = 100%
+        foreach ($accounts as $row) {
+            $year = (string) date('Y', strtotime($row->writeoff_date));
+            $akad = $row->akad_code;
+            $field = match ($akad) {
+                '01' => 'outstanding_balance',
+                '05' => 'tgkmdl',
+                default => 'outstanding_balance',
+            };
+            
+            // Writeoff outstanding = dari periode writeoff (fap_wo)
+            // Jika fap_wo tidak ada → outstanding = 0
+            $woOutstanding = (float) ($row->{"wo_{$field}"} ?? 0.0);
+            // Current outstanding = dari periode perhitungan (fap_calc)
+            $currentOutstanding = (float) $row->{"current_{$field}"};
+            // Recovery = max(0, writeoff_outstanding - current_outstanding)
             $recovery = max(0.0, $woOutstanding - $currentOutstanding);
             $recoveryByYear[$year] = ($recoveryByYear[$year] ?? 0.0) + $recovery;
         }
 
         ksort($recoveryByYear);
-
         return $recoveryByYear;
     }
 

@@ -155,7 +155,6 @@ class PdNetflowCalculationJob implements ShouldQueue
                 pdRatesPerAkad: $result['pd_rates_per_akad'] ?? null,
                 notes: $notes,
                 officeCode: $this->officeCode,
-                akadCode: $this->akadCode,
             );
 
             $writer->writePdNetflowDetail(

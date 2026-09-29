@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Lgd\CollateralShortfall;
 
 use App\Domain\Ckpn\Lgd\Contracts\LgdCalculationMethodInterface;
+use App\Domain\Ckpn\Services\AkadCalculationRulesRepository;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
 use App\Models\Collateral;
@@ -23,6 +24,10 @@ use App\Models\FinancingAccountPeriod;
  */
 final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInterface
 {
+    public function __construct(
+        private readonly AkadCalculationRulesRepository $akadRulesRepository,
+    ) {}
+
     /**
      * Hitung LGD CS agregat (rata-rata LGD per akun) untuk satu segmen dan periode.
      * Ref: PRD Bab 10
@@ -131,7 +136,9 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
 
         foreach ($uploads as $upload) {
             $account = $upload->financingAccount;
-            $outstanding = (float) $upload->outstanding_balance;
+            // Resolve field per akun berdasarkan akad_code akun — Ref: PRD Bab 5, 7, 10
+            $field = $this->akadRulesRepository->resolveField($calculationPeriod, $officeCode, $account->akad_code);
+            $outstanding = (float) $upload->{$field};
 
             if ($outstanding <= 0) {
                 continue;
