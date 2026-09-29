@@ -6,9 +6,9 @@ namespace App\Livewire\Ckpn;
 
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Domain\Ckpn\Services\CalculationDispatchService;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\CkpnIndividualCalculationJob;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnIndividualResult;
 use App\Models\CkpnPeriod;
@@ -139,14 +139,14 @@ class CkpnIndividualResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_CKPN,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => CkpnIndividualCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode)
+                => (new SyncCalculationService)->runCkpnIndividual($runLog, $usageType, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: 'Perhitungan untuk periode '.$periode.' sudah berjalan atau sedang diproses.');
         } else {
-            $this->dispatch('notify', type: 'success', message: $dispatched.' job CKPN Individual berhasil diantrikan untuk periode '.$periode.'.');
-            $this->isRunning = true;
+            $this->dispatch('notify', type: 'success', message: "Perhitungan CKPN Individual untuk periode {$periode} selesai ({$dispatched} segmen).");
         }
     }
 

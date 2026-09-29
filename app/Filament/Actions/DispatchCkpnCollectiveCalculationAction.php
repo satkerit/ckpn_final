@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\CkpnCollectiveCalculationJob;
 use App\Models\CalculationRunLog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -14,7 +15,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 
 /**
- * Filament Action: Dispatch CKPN Collective Calculation Job.
+ * Filament Action: Jalankan CKPN Collective secara sinkron.
  *
  * Ref: PRD Bab 11, 14
  */
@@ -39,19 +40,19 @@ final class DispatchCkpnCollectiveCalculationAction
                 $runLog = CalculationRunLog::create([
                     'period' => $data['calculation_period'],
                     'run_type' => RunType::CkpnCollective,
-                    'status' => \App\Enums\RunStatus::Pending,
-                    'notes' => 'Dispatched via UI',
+                    'status' => RunStatus::Pending,
+                    'notes' => 'Dijalankan via UI (sync)',
                 ]);
 
-                CkpnCollectiveCalculationJob::dispatch(
-                    $runLog->id,
+                (new SyncCalculationService)->runCkpnCollective(
+                    $runLog,
+                    UsageType::from($data['usage_type']),
                     $data['calculation_period'],
-                    UsageType::from($data['usage_type'])->value,
                 );
 
                 Notification::make()
-                    ->title('Job Dispatched')
-                    ->body("CKPN Collective calculation for {$data['calculation_period']} queued. Monitor at Job Monitor.")
+                    ->title('Perhitungan Selesai')
+                    ->body("CKPN Collective periode {$data['calculation_period']} selesai dijalankan.")
                     ->success()
                     ->send();
             });

@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\UsageType;
 use App\Enums\RunType;
-use App\Jobs\LgdErCalculationJob;
-use App\Jobs\LgdCsCalculationJob;
 use App\Models\CalculationRunLog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
@@ -76,15 +76,15 @@ class DispatchLgdCalculationAction extends Action
             $usageType = UsageType::from((int) $data['usage_type']);
             $calculationPeriod = $data['calculation_period'];
             $segmentDimensions = $data['segment_dimensions'] ?? [];
-
-            $dispatchCount = 0;
+            $runner = new SyncCalculationService;
+            $runCount = 0;
 
             if (in_array($lgdMethod, ['lgd_er', 'both'])) {
                 $runLogEr = CalculationRunLog::create([
                     'period' => $calculationPeriod,
                     'run_type' => RunType::LgdExpectedRecoveries,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'LGD Expected Recoveries %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -93,13 +93,13 @@ class DispatchLgdCalculationAction extends Action
                     ),
                 ]);
 
-                LgdErCalculationJob::dispatch(
-                    runLogId: $runLogEr->id,
-                    usageType: $usageType->value,
+                $runner->runLgdEr(
+                    runLog: $runLogEr,
+                    usageType: $usageType,
                     calculationPeriod: $calculationPeriod,
                     segmentDimensions: $segmentDimensions,
                 );
-                $dispatchCount++;
+                $runCount++;
             }
 
             if (in_array($lgdMethod, ['lgd_cs', 'both'])) {
@@ -107,7 +107,7 @@ class DispatchLgdCalculationAction extends Action
                     'period' => $calculationPeriod,
                     'run_type' => RunType::LgdCollateralShortfall,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'LGD Collateral Shortfall %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -116,18 +116,18 @@ class DispatchLgdCalculationAction extends Action
                     ),
                 ]);
 
-                LgdCsCalculationJob::dispatch(
-                    runLogId: $runLogCs->id,
-                    usageType: $usageType->value,
+                $runner->runLgdCs(
+                    runLog: $runLogCs,
+                    usageType: $usageType,
                     calculationPeriod: $calculationPeriod,
                     segmentDimensions: $segmentDimensions,
                 );
-                $dispatchCount++;
+                $runCount++;
             }
 
             Notification::make()
-                ->title('Perhitungan Dimulai')
-                ->body(sprintf('%d job LGD untuk periode %s telah dikirim ke queue.', $dispatchCount, $calculationPeriod))
+                ->title('Perhitungan Selesai')
+                ->body(sprintf('%d metode LGD periode %s selesai dijalankan.', $runCount, $calculationPeriod))
                 ->success()
                 ->send();
         } catch (\Throwable $e) {

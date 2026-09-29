@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
-use App\Enums\UsageType;
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\RunType;
-use App\Jobs\CkpnIndividualCalculationJob;
+use App\Enums\UsageType;
 use App\Models\CalculationRunLog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -31,7 +32,7 @@ class DispatchCkpnIndividualCalculationAction extends Action
                     ->required(),
             ])
             ->action(function (array $data) {
-                self::dispatchJob($data);
+                self::runCalculation($data);
             });
     }
 
@@ -46,7 +47,7 @@ class DispatchCkpnIndividualCalculationAction extends Action
         return $periods;
     }
 
-    private static function dispatchJob(array $data): void
+    private static function runCalculation(array $data): void
     {
         try {
             $usageType = UsageType::from((int) $data['usage_type']);
@@ -56,7 +57,7 @@ class DispatchCkpnIndividualCalculationAction extends Action
                 'period' => $calculationPeriod,
                 'run_type' => RunType::CkpnIndividual,
                 'usage_type' => $usageType->value,
-                'status' => 'Pending',
+                'status' => RunStatus::Pending,
                 'notes' => sprintf(
                     'CKPN Individual %s periode %s',
                     $usageType->label(),
@@ -64,15 +65,15 @@ class DispatchCkpnIndividualCalculationAction extends Action
                 ),
             ]);
 
-            CkpnIndividualCalculationJob::dispatch(
-                runLogId: $runLog->id,
-                usageType: $usageType->value,
-                calculationPeriod: $calculationPeriod,
+            (new SyncCalculationService)->runCkpnIndividual(
+                $runLog,
+                $usageType,
+                $calculationPeriod,
             );
 
             Notification::make()
-                ->title('Perhitungan Dimulai')
-                ->body(sprintf('Job CKPN Individual %s periode %s telah dikirim ke queue.', $usageType->label(), $calculationPeriod))
+                ->title('Perhitungan Selesai')
+                ->body(sprintf('CKPN Individual %s periode %s selesai dijalankan.', $usageType->label(), $calculationPeriod))
                 ->success()
                 ->send();
         } catch (\Throwable $e) {

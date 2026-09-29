@@ -5,9 +5,10 @@ declare(strict_types=1);
 namespace App\Filament\Actions;
 
 use App\Domain\Ckpn\Services\AkadEligibilityService;
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\UsageType;
 use App\Enums\RunType;
-use App\Jobs\PdNetflowCalculationJob;
 use App\Models\CalculationRunLog;
 use App\Models\CalculationSegmentationConfig;
 use Filament\Actions\Action;
@@ -67,12 +68,11 @@ class DispatchPdNetflowCalculationAction extends Action
             $calculationPeriod = $data['calculation_period'];
             $segmentDimensions = $data['segment_dimensions'] ?? [];
 
-            // Create run log
             $runLog = CalculationRunLog::create([
                 'period' => $calculationPeriod,
                 'run_type' => RunType::PdNetflow,
                 'usage_type' => $usageType->value,
-                'status' => 'Pending',
+                'status' => RunStatus::Pending,
                 'notes' => sprintf(
                     'PD Netflow %s periode %s (segmentasi: %s)',
                     $usageType->label(),
@@ -81,17 +81,16 @@ class DispatchPdNetflowCalculationAction extends Action
                 ),
             ]);
 
-            // Dispatch job dengan segment dimensions
-            PdNetflowCalculationJob::dispatch(
-                runLogId: $runLog->id,
-                usageType: $usageType->value,
+            (new SyncCalculationService)->runPdNetflow(
+                runLog: $runLog,
+                usageType: $usageType,
                 calculationPeriod: $calculationPeriod,
                 segmentDimensions: $segmentDimensions,
             );
 
             Notification::make()
-                ->title('Perhitungan Dimulai')
-                ->body(sprintf('Job PD Netflow untuk periode %s telah dikirim ke queue.', $calculationPeriod))
+                ->title('Perhitungan Selesai')
+                ->body(sprintf('PD Netflow periode %s selesai dijalankan.', $calculationPeriod))
                 ->success()
                 ->send();
         } catch (\Throwable $e) {

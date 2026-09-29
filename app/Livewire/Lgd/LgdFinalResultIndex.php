@@ -9,7 +9,7 @@ use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\LgdFinalCalculationJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CalculationRunLog;
 use App\Models\LgdExpectedRecoveriesResult;
 use App\Models\LgdFinalResult;
@@ -35,9 +35,6 @@ class LgdFinalResultIndex extends Component
     public string $runPeriode = '';
 
     public bool $isRunning = false;
-
-    /** ID run log terkecil dari batch terbaru (dipakai pollJobStatus agar tidak tercampur batch lama). */
-    public int $currentBatchMinRunLogId = 0;
 
     /** Aksi yang menunggu konfirmasi: 'hitung' | 'rekalkulasi' | 'hapus' | '' */
     public string $confirmingAction = '';
@@ -65,32 +62,16 @@ class LgdFinalResultIndex extends Component
         $this->syncPeriodeState();
     }
 
-    /** Sinkronisasi state isRunning, runPeriodeHasResult, dan currentBatchMinRunLogId dari DB (agar tahan page refresh). */
+    /** Sinkronisasi state runPeriodeHasResult dari DB (agar tahan page refresh). */
     private function syncPeriodeState(): void
     {
         if ($this->runPeriode === '') {
             $this->runPeriodeHasResult = false;
-            $this->isRunning = false;
-            $this->currentBatchMinRunLogId = 0;
 
             return;
         }
 
         $this->runPeriodeHasResult = LgdFinalResult::where('calculation_period', $this->runPeriode)->exists();
-
-        // Cek apakah masih ada job yang sedang berjalan (Pending/Processing)
-        $activeLogs = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::LgdFinal->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->get(['id']);
-
-        $this->isRunning = $activeLogs->isNotEmpty();
-
-        // Jika ada job aktif dan currentBatchMinRunLogId belum di-set (misal setelah page refresh),
-        // gunakan ID minimum dari job aktif sebagai batas batch terbaru.
-        if ($this->isRunning && $this->currentBatchMinRunLogId === 0) {
-            $this->currentBatchMinRunLogId = $activeLogs->min('id') ?? 0;
-        }
     }
 
     public function tampilkanData(): void
@@ -187,62 +168,26 @@ class LgdFinalResultIndex extends Component
 
     public function pollJobStatus(): void
     {
-        if ($this->runPeriode === '') {
-            return;
-        }
-
-        // Re-sync isRunning dari DB agar tahan refresh halaman (property Livewire tidak persisten)
-        $this->syncPeriodeState();
-
-        if (! $this->isRunning) {
-            return;
-        }
-
-        // Filter hanya ke batch terbaru (id >= currentBatchMinRunLogId) agar run log
-        // lama yang berstatus failed tidak membuat allDone = true secara prematur.
-        $query = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::LgdFinal->value)
-            ->whereNotIn('status', [RunStatus::Completed->value, RunStatus::Failed->value]);
-
-        if ($this->currentBatchMinRunLogId > 0) {
-            $query->where('id', '>=', $this->currentBatchMinRunLogId);
-        }
-
-        $allDone = $query->doesntExist();
-
-        if ($allDone) {
-            $this->isRunning = false;
-            $this->runPeriodeHasResult = LgdFinalResult::where('calculation_period', $this->runPeriode)->exists();
-            $this->showResults = $this->runPeriodeHasResult;
-            $this->filterPeriode = $this->runPeriode;
-        }
+        // no-op: perhitungan sekarang sinkron, polling tidak diperlukan
     }
 
     private function dispatchJobs(): void
     {
-        $this->isRunning = true;
-        $this->currentBatchMinRunLogId = 0;
-
-        $firstId = null;
-
         // Dispatch per (jenis penggunaan × target kantor) — Ref: PRD Bab 5 (segmentasi level 1)
         CalculationDispatchService::dispatchPerSegment(
             runType: RunType::LgdFinal,
             akadKey: AkadEligibilityService::KEY_LGD_RATE,
             period: $this->runPeriode,
             userId: auth()->id(),
-            dispatcher: function (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) use (&$firstId): void {
-                if ($firstId === null) {
-                    $firstId = $runLog->id;
-                }
-
-                LgdFinalCalculationJob::dispatch($runLog->id, $usageType->value, $this->runPeriode, $officeCode);
-            },
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode): void
+                => (new SyncCalculationService)->runLgdFinal($runLog, $usageType, $this->runPeriode, $officeCode),
             forceRerun: true,
         );
 
-        // Simpan ID minimum batch ini agar pollJobStatus tidak tercampur run log lama yang failed
-        $this->currentBatchMinRunLogId = $firstId ?? 0;
+        $this->isRunning = false;
+        $this->runPeriodeHasResult = LgdFinalResult::where('calculation_period', $this->runPeriode)->exists();
+        $this->showResults = $this->runPeriodeHasResult;
+        $this->filterPeriode = $this->runPeriode;
     }
 
     /** Daftar periode yang tersedia dari snapshot LGD ER (sumber data LGD Final). */

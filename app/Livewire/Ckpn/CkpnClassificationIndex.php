@@ -7,8 +7,7 @@ namespace App\Livewire\Ckpn;
 use App\Enums\ClassificationType;
 use App\Enums\UsageType;
 use App\Exports\CkpnClassificationExport;
-use App\Jobs\ClassifyPeriodDataJob;
-use App\Jobs\PopulatePeriodDebtorsJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CkpnPeriod;
 use App\Models\CkpnPeriodClassification;
 use App\Models\FinancingOffice;
@@ -174,17 +173,16 @@ class CkpnClassificationIndex extends Component
         // Cek apakah data staging sudah ada untuk periode ini
         $hasStagingData = CkpnPeriodClassification::where('period', $period->period)->exists();
 
+        $runner = new SyncCalculationService;
+
         if ($hasStagingData) {
-            // Jika data staging sudah ada, langsung jalankan klasifikasi tanpa populate ulang
-            ClassifyPeriodDataJob::dispatch($period->id, (int) auth()->id());
+            $runner->runClassifyPeriodData($period, (int) auth()->id());
         } else {
-            // Jika belum ada data staging, populate dulu baru klasifikasi
-            PopulatePeriodDebtorsJob::withChain([
-                new ClassifyPeriodDataJob($period->id, (int) auth()->id()),
-            ])->dispatch($period->id, (int) auth()->id());
+            $runner->runPopulatePeriodDebtors($period, (int) auth()->id());
+            $runner->runClassifyPeriodData($period, (int) auth()->id());
         }
 
-        $this->dispatch('notify', type: 'success', message: "Klasifikasi periode {$period->period} dimasukkan ke antrean.");
+        $this->dispatch('notify', type: 'success', message: "Klasifikasi periode {$period->period} selesai dijalankan.");
     }
 
     public function updatedFilterPeriode(): void

@@ -11,7 +11,7 @@ use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
 use App\Exports\PdNetflowSourceExport;
-use App\Jobs\PdNetflowCalculationJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
@@ -229,17 +229,18 @@ class PdNetflowResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => (new SyncCalculationService)->runPdNetflow($runLog, $usageType, $periode, $officeCode, $akadCode),
         ));
 
         if ($result['dispatched'] === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");
         } else {
-            $this->dispatch('notify', type: 'success', message: "Dispatched {$result['dispatched']} job perhitungan PD Netflow untuk periode {$periode} (konsolidasi + pecahan per kantor).");
+            $this->dispatch('notify', type: 'success', message: "Perhitungan PD Netflow untuk periode {$periode} selesai ({$result['dispatched']} segmen).");
         }
 
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = PdNetflowResult::where('calculation_period', $periode)->exists();
         $this->showResults = true;
+        $this->filterPeriode = $periode;
     }
 
     /**
@@ -290,13 +291,15 @@ class PdNetflowResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdNetflowCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => (new SyncCalculationService)->runPdNetflow($runLog, $usageType, $periode, $officeCode, $akadCode),
             forceRerun: true,
         );
 
         $this->runPeriode = $periode;
-        $this->isRunning = true;
-        $this->dispatch('notify', type: 'success', message: "Re-kalkulasi dispatched {$result['dispatched']} job untuk periode {$periode} (konsolidasi + pecahan per kantor).");
+        $this->runPeriodeHasResult = PdNetflowResult::where('calculation_period', $periode)->exists();
+        $this->showResults = true;
+        $this->filterPeriode = $periode;
+        $this->dispatch('notify', type: 'success', message: "Re-kalkulasi PD Netflow untuk periode {$periode} selesai ({$result['dispatched']} segmen).");
     }
 
     /** Hapus seluruh snapshot PD Netflow berdasarkan periode terpilih. */
@@ -355,31 +358,6 @@ class PdNetflowResultIndex extends Component
         });
 
         $this->redirect(route('kalkulasi.pd.index'), navigate: true);
-    }
-
-    /** Polling status job aktif untuk periode runPeriode. */
-    public function pollJobStatus(): void
-    {
-        if ($this->runPeriode === '') {
-            return;
-        }
-
-        $activeCount = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::PdNetflow->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->count();
-
-        $wasRunning = $this->isRunning;
-        $this->isRunning = $activeCount > 0;
-
-        // Saat job baru selesai, refresh status hasil dan tampilkan data
-        if ($wasRunning && ! $this->isRunning) {
-            $this->runPeriodeHasResult = PdNetflowResult::where('calculation_period', $this->runPeriode)->exists();
-            if ($this->runPeriodeHasResult) {
-                $this->filterPeriode = $this->runPeriode;
-                $this->showResults = true;
-            }
-        }
     }
 
     public function render(): View

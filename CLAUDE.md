@@ -8,7 +8,7 @@ Contoh operasi yang wajib konfirmasi (daftar lengkap di `AGENTS.md` Bab 13.1):
 
 - DDL destruktif: `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, perubahan kolom yang berisiko kehilangan nilai.
 - DML penghapusan: `DELETE` massal, `Model::truncate()`, hard delete yang menggantikan soft delete.
-- Artisan destruktif: `migrate:fresh`, `migrate:refresh`, `db:wipe`, reset seeder yang menimpa data existing.
+- Artisan destruktif: **`migrate:fresh` DILARANG tanpa konfirmasi eksplisit user** (menghapus semua tabel/data, tidak reversible). Juga: `migrate:refresh`, `db:wipe`, reset seeder yang menimpa data existing.
 - Snapshot CKPN: hapus/timpa `pd_netflow_result`, `pd_migration_result`, `lgd_*_result`, `ckpn_*_result`, atau tabel master (PRD Bab 15).
 - Queue/Job: `queue:flush`, `queue:clear`, pembatalan batch perhitungan.
 - File data: hapus/overwrite file di `storage/app`, `rm -rf` di luar target eksplisit.

@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\UsageType;
 use App\Enums\RunType;
-use App\Jobs\PdMigrationCalculationJob;
 use App\Models\CalculationRunLog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
@@ -68,7 +69,7 @@ class DispatchPdMigrationCalculationAction extends Action
                 'period' => $calculationPeriod,
                 'run_type' => RunType::PdMigration,
                 'usage_type' => $usageType->value,
-                'status' => 'Pending',
+                'status' => RunStatus::Pending,
                 'notes' => sprintf(
                     'PD Migration %s periode %s (segmentasi: %s)',
                     $usageType->label(),
@@ -77,16 +78,16 @@ class DispatchPdMigrationCalculationAction extends Action
                 ),
             ]);
 
-            PdMigrationCalculationJob::dispatch(
-                runLogId: $runLog->id,
-                usageType: $usageType->value,
+            (new SyncCalculationService)->runPdMigration(
+                runLog: $runLog,
+                usageType: $usageType,
                 calculationPeriod: $calculationPeriod,
                 segmentDimensions: $segmentDimensions,
             );
 
             Notification::make()
-                ->title('Perhitungan Dimulai')
-                ->body(sprintf('Job PD Migration untuk periode %s telah dikirim ke queue.', $calculationPeriod))
+                ->title('Perhitungan Selesai')
+                ->body(sprintf('PD Migration periode %s selesai dijalankan.', $calculationPeriod))
                 ->success()
                 ->send();
         } catch (\Throwable $e) {

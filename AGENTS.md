@@ -30,7 +30,7 @@ Spesifikasi bisnis lengkap ada di `PRD.md` — **jangan duplikasikan isi PRD di 
 | Admin Panel     | Filament 4.x                                                           |
 | Database        | MySQL 8.x                                                              |
 | CSS             | Tailwind CSS (bawaan Filament, jangan tambah framework CSS lain)       |
-| Testing         | Pest (preferred) atau PHPUnit — ikuti yang sudah terpasang di repo     |
+| Testing         | Pest (preferred) atau PHPUnit — ikuti yang sudah terpasang di repo    |
 | Queue           | Database/Redis driver untuk job perhitungan batch (lihat PRD Bab 13.2) |
 | Package manager | Composer + npm (jangan campur yarn/pnpm dalam repo yang sama)          |
 
@@ -106,16 +106,16 @@ tests/
 
 Jangan salin ulang rumus/penjelasan panjang dari PRD ke kode/komentar. Cukup gunakan tabel ringkas ini sebagai index cepat saat butuh tahu "ini masuk domain mana":
 
-| Domain                                 | Kelas Utama                                       | Ref PRD                                                                                   |
-| -------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Segmentasi                             | `RiskSegment`, `FinancingAccountSegmentMap`       | Bab 5                                                                                     |
-| CKPN Individual                        | `CkpnIndividualCalculator`                        | Bab 6.1                                                                                   |
-| PD Netflow                             | `PdNetflowCalculator`, `BucketMovementValidator`  | Bab 7                                                                                     |
-| PD Migration                           | `PdMigrationCalculator`, `MigrationMatrixBuilder` | Bab 8                                                                                     |
-| LGD Expected Recoveries                | `LgdExpectedRecoveriesCalculator`                 | Bab 9                                                                                     |
-| LGD Collateral Shortfall               | `LgdCollateralShortfallCalculator`                | Bab 10                                                                                    |
-| Kombinasi PD/LGD final → CKPN Kolektif | `CkpnCollectiveCalculator`                        | Bab 11 (⚠️ kebijakan kombinasi belum final, cek Bab 12 open items sebelum hardcode logic) |
-| Data model                             | —                                                 | Bab 15                                                                                    |
+| Domain                                  | Kelas Utama                                           | Ref PRD                                                                                     |
+| --------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Segmentasi                              | `RiskSegment`, `FinancingAccountSegmentMap`       | Bab 5                                                                                       |
+| CKPN Individual                         | `CkpnIndividualCalculator`                          | Bab 6.1                                                                                     |
+| PD Netflow                              | `PdNetflowCalculator`, `BucketMovementValidator`  | Bab 7                                                                                       |
+| PD Migration                            | `PdMigrationCalculator`, `MigrationMatrixBuilder` | Bab 8                                                                                       |
+| LGD Expected Recoveries                 | `LgdExpectedRecoveriesCalculator`                   | Bab 9                                                                                       |
+| LGD Collateral Shortfall                | `LgdCollateralShortfallCalculator`                  | Bab 10                                                                                      |
+| Kombinasi PD/LGD final → CKPN Kolektif | `CkpnCollectiveCalculator`                          | Bab 11 (⚠️ kebijakan kombinasi belum final, cek Bab 12 open items sebelum hardcode logic) |
+| Data model                              | —                                                    | Bab 15                                                                                      |
 
 **Jika ada open item PRD Bab 12 yang belum dikonfirmasi user** (mis. rentang bucket 2–13, kebijakan kombinasi PD/LGD) dan implementasi butuh nilai tsb: **buat parameter configurable dengan nilai default yang jelas ditandai TODO**, jangan hardcode angka tebakan tanpa penanda. Contoh:
 
@@ -209,6 +209,7 @@ Setiap kali menyelesaikan satu unit pekerjaan (1 fitur kecil, 1 fase, 1 perbaika
    - File utama yang berubah: path saja (tidak perlu isi lengkap)
    - Next step / blocker (jika ada)
    ```
+
    Tulis **ringkas dan padat** (hemat token) — ini log kerja, bukan laporan naratif.
 2. **Update dokumentasi teknis terkait** setiap ada perubahan yang memengaruhi:
    - Struktur database → update ringkasan skema (mis. `docs/DATABASE.md` bila sudah dibuat pada tahap Technical Design).
@@ -226,15 +227,15 @@ Agent **wajib meminta konfirmasi eksplisit dari user dan menunggu persetujuan** 
 
 ### 13.1 Cakupan Operasi yang WAJIB Dikonfirmasi
 
-| Kategori | Contoh operasi |
-| --- | --- |
-| DDL destruktif | `DROP TABLE`, `DROP DATABASE`, `DROP COLUMN`, `DROP INDEX` pada data terpakai, `TRUNCATE`, ubah tipe kolom yang berisiko kehilangan nilai |
-| DML penghapusan | `DELETE` massal/tanpa key spesifik, `Model::truncate()`, `->delete()` pada koleksi luas, hard delete yang menggantikan soft delete |
-| Artisan destruktif | `migrate:fresh`, `migrate:refresh`, `migrate:rollback` yang menghapus data/kolom, `db:wipe`, reset seeder yang menimpa/menghapus data existing |
-| Data snapshot CKPN | Hapus/timpa baris `pd_netflow_result`, `pd_migration_result`, `lgd_*_result`, `ckpn_*_result`, atau tabel master (`risk_segments`, `akad_calculation_rules`, dsb. — PRD Bab 15). Snapshot bersifat immutable; penghapusan = hilangnya histori audit |
-| Queue/Job | `queue:flush`, `queue:clear`, `queue:restart`, atau membatalkan batch saat perhitungan berjalan (PRD Bab 13.2) |
-| File data | Hapus/overwrite file import/ekspor di `storage/app`, `rm -rf` di luar target yang eksplisit diminta user |
-| Repository | `git reset --hard`, `git clean -fd`, `git checkout/restore .`, `git push --force`, `commit --amend` pada commit yang sudah di-push |
+| Kategori           | Contoh operasi                                                                                                                                                                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DDL destruktif     | `DROP TABLE`, `DROP DATABASE`, `DROP COLUMN`, `DROP INDEX` pada data terpakai, `TRUNCATE`, ubah tipe kolom yang berisiko kehilangan nilai                                                                                                             |
+| DML penghapusan    | `DELETE` massal/tanpa key spesifik, `Model::truncate()`, `->delete()` pada koleksi luas, hard delete yang menggantikan soft delete                                                                                                                        |
+| Artisan destruktif | **`migrate:fresh` DILARANG tanpa konfirmasi eksplisit user** (menghapus semua tabel/data, tidak reversible). Juga: `migrate:refresh`, `migrate:rollback` yang menghapus data/kolom, `db:wipe`, reset seeder yang menimpa/menghapus data existing. |
+| Data snapshot CKPN | Hapus/timpa baris`pd_netflow_result`, `pd_migration_result`, `lgd_*_result`, `ckpn_*_result`, atau tabel master (`risk_segments`, `akad_calculation_rules`, dsb. — PRD Bab 15). Snapshot bersifat immutable; penghapusan = hilangnya histori audit |
+| Queue/Job          | `queue:flush`, `queue:clear`, `queue:restart`, atau membatalkan batch saat perhitungan berjalan (PRD Bab 13.2)                                                                                                                                            |
+| File data          | Hapus/overwrite file import/ekspor di`storage/app`, `rm -rf` di luar target yang eksplisit diminta user                                                                                                                                                     |
+| Repository         | `git reset --hard`, `git clean -fd`, `git checkout/restore .`, `git push --force`, `commit --amend` pada commit yang sudah di-push                                                                                                                    |
 
 Operasi di luar daftar tapi berpotensi serupa (mis. `updateOrCreate`/`upsert` massal yang menimpa banyak nilai existing) diperlakukan sama: **konfirmasi dulu**.
 

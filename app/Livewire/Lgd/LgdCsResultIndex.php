@@ -11,7 +11,7 @@ use App\Enums\RunType;
 use App\Enums\UsageType;
 use App\Exports\LgdCollateralShortfallExport;
 use App\Exports\LgdCsSourceExport;
-use App\Jobs\LgdCsCalculationJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CalculationRunLog;
 use App\Models\LgdCollateralShortfallBySegmentResult;
 use App\Models\LgdCollateralShortfallResult;
@@ -193,17 +193,18 @@ class LgdCsResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_LGD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => (new SyncCalculationService)->runLgdCs($runLog, $usageType, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: 'Perhitungan untuk periode '.$periode.' sudah berjalan atau sedang diproses.');
         } else {
-            $this->dispatch('notify', type: 'success', message: $dispatched.' job LGD-CS berhasil diantrikan untuk periode '.$periode.'.');
+            $this->dispatch('notify', type: 'success', message: 'Perhitungan LGD-CS untuk periode '.$periode.' selesai ('.$dispatched.' segmen).');
         }
 
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = LgdCollateralShortfallResult::where('calculation_period', $periode)->exists();
         $this->showResults = true;
+        $this->filterPeriode = $periode;
     }
 
     /**
@@ -263,14 +264,15 @@ class LgdCsResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_LGD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => LgdCsCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => (new SyncCalculationService)->runLgdCs($runLog, $usageType, $periode, $officeCode, $akadCode),
             forceRerun: true,
         )['dispatched'];
 
         $this->runPeriode = $periode;
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = LgdCollateralShortfallResult::where('calculation_period', $periode)->exists();
         $this->showResults = true;
-        $this->dispatch('notify', type: 'success', message: "Rekalkulasi dispatched {$dispatched} job untuk periode {$periode}.");
+        $this->filterPeriode = $periode;
+        $this->dispatch('notify', type: 'success', message: "Rekalkulasi LGD-CS untuk periode {$periode} selesai ({$dispatched} segmen).");
     }
 
     /** Hapus seluruh snapshot LGD Collateral Shortfall berdasarkan periode terpilih. */
@@ -376,31 +378,6 @@ class LgdCsResultIndex extends Component
             new LgdCsSourceExport($this->filterPeriode, $this->filterUsageType, $this->search),
             "nasabah-lgd-cs{$suffix}.xlsx",
         );
-    }
-
-    /** Polling status job aktif untuk periode runPeriode. */
-    public function pollJobStatus(): void
-    {
-        if ($this->runPeriode === '') {
-            return;
-        }
-
-        $activeCount = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::LgdCs->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->count();
-
-        $wasRunning = $this->isRunning;
-        $this->isRunning = $activeCount > 0;
-
-        // Saat job baru selesai, refresh status hasil dan tampilkan data
-        if ($wasRunning && ! $this->isRunning) {
-            $this->runPeriodeHasResult = LgdCollateralShortfallResult::where('calculation_period', $this->runPeriode)->exists();
-            if ($this->runPeriodeHasResult) {
-                $this->filterPeriode = $this->runPeriode;
-                $this->showResults = true;
-            }
-        }
     }
 
     public function render(): View

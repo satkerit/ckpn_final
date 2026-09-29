@@ -4,12 +4,10 @@ declare(strict_types=1);
 
 namespace App\Filament\Actions;
 
+use App\Domain\Ckpn\Services\SyncCalculationService;
+use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\LgdCsCalculationJob;
-use App\Jobs\LgdErCalculationJob;
-use App\Jobs\PdMigrationCalculationJob;
-use App\Jobs\PdNetflowCalculationJob;
 use App\Models\CalculationRunLog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
@@ -43,7 +41,7 @@ class BatchCalculationAction extends Action
                         'lgd_cs' => 'LGD Collateral Shortfall',
                     ])
                     ->default(['pd_netflow', 'pd_migration', 'lgd_er', 'lgd_cs'])
-                    ->helperText('Pilih metode untuk dijalankan paralel. Semua dijalankan async via queue.')
+                    ->helperText('Pilih metode untuk dijalankan secara berurutan (sinkron).')
                     ->required(),
 
                 CheckboxList::make('segment_dimensions')
@@ -57,7 +55,7 @@ class BatchCalculationAction extends Action
                     ->default([]),
             ])
             ->action(function (array $data) {
-                self::dispatchBatch($data);
+                self::runBatch($data);
             });
     }
 
@@ -72,7 +70,7 @@ class BatchCalculationAction extends Action
         return $periods;
     }
 
-    private static function dispatchBatch(array $data): void
+    private static function runBatch(array $data): void
     {
         try {
             $period = $data['calculation_period'];
@@ -80,7 +78,8 @@ class BatchCalculationAction extends Action
             $methods = $data['methods'] ?? [];
             $segmentDimensions = $data['segment_dimensions'] ?? [];
 
-            $dispatchCount = 0;
+            $runCount = 0;
+            $runner = new SyncCalculationService;
 
             // PD Netflow
             if (in_array('pd_netflow', $methods)) {
@@ -88,7 +87,7 @@ class BatchCalculationAction extends Action
                     'period' => $period,
                     'run_type' => RunType::PdNetflow,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'Batch: PD Netflow %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -97,13 +96,8 @@ class BatchCalculationAction extends Action
                     ),
                 ]);
 
-                PdNetflowCalculationJob::dispatch(
-                    runLogId: $runLog->id,
-                    usageType: $usageType->value,
-                    calculationPeriod: $period,
-                    segmentDimensions: $segmentDimensions,
-                );
-                $dispatchCount++;
+                $runner->runPdNetflow($runLog, $usageType, $period, segmentDimensions: $segmentDimensions);
+                $runCount++;
             }
 
             // PD Migration
@@ -112,7 +106,7 @@ class BatchCalculationAction extends Action
                     'period' => $period,
                     'run_type' => RunType::PdMigration,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'Batch: PD Migration %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -121,13 +115,8 @@ class BatchCalculationAction extends Action
                     ),
                 ]);
 
-                PdMigrationCalculationJob::dispatch(
-                    runLogId: $runLog->id,
-                    usageType: $usageType->value,
-                    calculationPeriod: $period,
-                    segmentDimensions: $segmentDimensions,
-                );
-                $dispatchCount++;
+                $runner->runPdMigration($runLog, $usageType, $period, segmentDimensions: $segmentDimensions);
+                $runCount++;
             }
 
             // LGD Expected Recoveries
@@ -136,7 +125,7 @@ class BatchCalculationAction extends Action
                     'period' => $period,
                     'run_type' => RunType::LgdEr,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'Batch: LGD Expected Recoveries %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -145,13 +134,8 @@ class BatchCalculationAction extends Action
                     ),
                 ]);
 
-                LgdErCalculationJob::dispatch(
-                    runLogId: $runLog->id,
-                    usageType: $usageType->value,
-                    calculationPeriod: $period,
-                    segmentDimensions: $segmentDimensions,
-                );
-                $dispatchCount++;
+                $runner->runLgdEr($runLog, $usageType, $period, segmentDimensions: $segmentDimensions);
+                $runCount++;
             }
 
             // LGD Collateral Shortfall
@@ -160,7 +144,7 @@ class BatchCalculationAction extends Action
                     'period' => $period,
                     'run_type' => RunType::LgdCs,
                     'usage_type' => $usageType->value,
-                    'status' => 'Pending',
+                    'status' => RunStatus::Pending,
                     'notes' => sprintf(
                         'Batch: LGD Collateral Shortfall %s periode %s (segmentasi: %s)',
                         $usageType->label(),
@@ -169,20 +153,15 @@ class BatchCalculationAction extends Action
                     ),
                 ]);
 
-                LgdCsCalculationJob::dispatch(
-                    runLogId: $runLog->id,
-                    usageType: $usageType->value,
-                    calculationPeriod: $period,
-                    segmentDimensions: $segmentDimensions,
-                );
-                $dispatchCount++;
+                $runner->runLgdCs($runLog, $usageType, $period, segmentDimensions: $segmentDimensions);
+                $runCount++;
             }
 
             Notification::make()
-                ->title('Batch Perhitungan Dimulai')
+                ->title('Batch Perhitungan Selesai')
                 ->body(sprintf(
-                    '%d job untuk %s %s telah dikirim ke queue. Pantau status di Job Monitor.',
-                    $dispatchCount,
+                    '%d perhitungan untuk %s %s selesai dijalankan.',
+                    $runCount,
                     $usageType->label(),
                     $period,
                 ))

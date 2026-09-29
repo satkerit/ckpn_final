@@ -9,7 +9,7 @@ use App\Domain\Ckpn\Services\CalculationDispatchService;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\CkpnCollectiveCalculationJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnCollectiveResult;
@@ -332,11 +332,8 @@ class CkpnCollectiveResultIndex extends Component
             period: $periode,
             userId: auth()->id(),
             // Pass pdMethod eksplisit agar job tidak perlu query ulang — Ref: PRD Bab 12.3
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
-                $runLog->id,
-                $periode,
-                $usageType->value,
-            ),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode)
+                => (new SyncCalculationService)->runCkpnCollective($runLog, $usageType, $periode, $officeCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
@@ -345,9 +342,10 @@ class CkpnCollectiveResultIndex extends Component
             return;
         }
 
-        $this->dispatch('notify', type: 'success', message: $dispatched.' job CKPN Kolektif berhasil diantrikan untuk periode '.$periode.'.');
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = CkpnCollectiveResult::where('calculation_period', $periode)->exists();
+        $this->filterPeriode = $periode;
         $this->showResults = true;
+        $this->dispatch('notify', type: 'success', message: "Perhitungan CKPN Kolektif untuk periode {$periode} selesai ({$dispatched} segmen).");
     }
 
     /**
@@ -384,17 +382,15 @@ class CkpnCollectiveResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_CKPN,
             period: $periode,
             userId: auth()->id(),
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode) => CkpnCollectiveCalculationJob::dispatch(
-                $runLog->id,
-                $periode,
-                $usageType->value,
-            ),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode)
+                => (new SyncCalculationService)->runCkpnCollective($runLog, $usageType, $periode, $officeCode),
             forceRerun: true,
         );
 
-        $this->dispatch('notify', type: 'success', message: 'Rekalkulasi CKPN Kolektif periode '.$periode.' berhasil diantrikan.');
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = CkpnCollectiveResult::where('calculation_period', $periode)->exists();
+        $this->filterPeriode = $periode;
         $this->showResults = true;
+        $this->dispatch('notify', type: 'success', message: "Rekalkulasi CKPN Kolektif periode {$periode} selesai.");
     }
 
     /**
@@ -444,30 +440,6 @@ class CkpnCollectiveResultIndex extends Component
         });
 
         $this->redirect(route('kalkulasi.ckpn.index'), navigate: true);
-    }
-
-    /**
-     * Poll status job per UsageType. Setelah semua job selesai, tampilkan hasil otomatis.
-     */
-    public function pollJobStatus(): void
-    {
-        if (! $this->isRunning || $this->runPeriode === '') {
-            return;
-        }
-
-        $activeCount = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::CkpnCollective->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->count();
-
-        $wasRunning = $this->isRunning;
-        $this->isRunning = $activeCount > 0;
-
-        if ($wasRunning && ! $this->isRunning) {
-            $this->runPeriodeHasResult = CkpnCollectiveResult::where('calculation_period', $this->runPeriode)->exists();
-            $this->filterPeriode = $this->runPeriode;
-            $this->showResults = true;
-        }
     }
 
     public function konfirmasiHapus(int $id): void
@@ -570,11 +542,8 @@ class CkpnCollectiveResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_CKPN,
             period: $periode,
             userId: auth()->id(),
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => CkpnCollectiveCalculationJob::dispatch(
-                $runLog->id,
-                $periode,
-                $usageType->value,
-            ),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode)
+                => (new SyncCalculationService)->runCkpnCollective($runLog, $usageType, $periode, $officeCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
@@ -583,9 +552,10 @@ class CkpnCollectiveResultIndex extends Component
             return;
         }
 
-        $this->dispatch('notify', type: 'success', message: "{$dispatched} job CKPN Kolektif berhasil diantrikan untuk periode {$periode} menggunakan PD ".strtoupper($pdMethodOverride).'.');
-        $this->isRunning = true;
+        $this->runPeriodeHasResult = CkpnCollectiveResult::where('calculation_period', $periode)->exists();
+        $this->filterPeriode = $periode;
         $this->showResults = true;
+        $this->dispatch('notify', type: 'success', message: "Perhitungan CKPN Kolektif periode {$periode} selesai ({$dispatched} segmen) menggunakan PD ".strtoupper($pdMethodOverride).'.');
     }
 
     private function isValidPeriod(string $periode): bool

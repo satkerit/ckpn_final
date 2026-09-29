@@ -10,7 +10,7 @@ use App\Enums\PdMethod;
 use App\Enums\RunStatus;
 use App\Enums\RunType;
 use App\Enums\UsageType;
-use App\Jobs\PdMigrationCalculationJob;
+use App\Domain\Ckpn\Services\SyncCalculationService;
 use App\Models\CalculationGeneralSetting;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnPeriod;
@@ -195,41 +195,18 @@ class PdMigrationResultIndex extends Component
             akadKey: AkadEligibilityService::KEY_PD_RATE,
             period: $periode,
             userId: $userId,
-            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => PdMigrationCalculationJob::dispatch($runLog->id, $usageType->value, $periode, $officeCode, $akadCode),
+            dispatcher: fn (CalculationRunLog $runLog, UsageType $usageType, ?string $officeCode, ?string $akadCode) => (new SyncCalculationService)->runPdMigration($runLog, $usageType, $periode, $officeCode, $akadCode),
         )['dispatched'];
 
         if ($dispatched === 0) {
             $this->dispatch('notify', type: 'warning', message: "Perhitungan untuk periode {$periode} sudah berjalan atau sedang diproses.");
         } else {
-            $this->dispatch('notify', type: 'success', message: "Dispatched {$dispatched} job perhitungan PD Migration untuk periode {$periode}.");
+            $this->dispatch('notify', type: 'success', message: "Perhitungan PD Migration untuk periode {$periode} selesai ({$dispatched} segmen).");
         }
 
-        $this->isRunning = true;
-    }
-
-    /** Polling status job aktif untuk periode runPeriode. */
-    public function pollJobStatus(): void
-    {
-        if ($this->runPeriode === '') {
-            return;
-        }
-
-        $activeCount = CalculationRunLog::where('period', $this->runPeriode)
-            ->where('run_type', RunType::PdMigration->value)
-            ->whereIn('status', [RunStatus::Pending->value, RunStatus::Processing->value])
-            ->count();
-
-        $wasRunning = $this->isRunning;
-        $this->isRunning = $activeCount > 0;
-
-        // Saat job baru selesai, refresh status hasil dan tampilkan data otomatis
-        if ($wasRunning && ! $this->isRunning) {
-            $this->runPeriodeHasResult = PdMigrationResult::where('calculation_period', $this->runPeriode)->exists();
-            if ($this->runPeriodeHasResult) {
-                $this->filterPeriode = $this->runPeriode;
-                $this->showResults = true;
-            }
-        }
+        $this->runPeriodeHasResult = PdMigrationResult::where('calculation_period', $periode)->exists();
+        $this->showResults = true;
+        $this->filterPeriode = $periode;
     }
 
     public function render(): View
