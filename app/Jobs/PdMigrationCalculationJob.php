@@ -58,6 +58,8 @@ class PdMigrationCalculationJob implements ShouldQueue
         private readonly ?string $officeCode = null,
         /** NULL = konsolidasi semua akad; 'xx' = pecahan per kode akad (level 2 segmentasi) */
         private readonly ?string $akadCode = null,
+        /** Dimensi dinamis untuk segmentasi (mis. ['office_code', 'akad_code']). Empty = legacy single calculate() */
+        private readonly array $segmentDimensions = [],
     ) {}
 
     /**
@@ -93,6 +95,26 @@ class PdMigrationCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
+            $builder = new MigrationMatrixBuilder;
+            $calculator = new PdMigrationCalculator($builder);
+            $writer = new SnapshotWriter;
+
+            // Cabang: calculateDynamic() jika segmentDimensions disediakan, else single calculate()
+            if (!empty($this->segmentDimensions)) {
+                $dynamicResult = $calculator->calculateDynamic($usageType, $this->calculationPeriod, $this->segmentDimensions);
+                foreach ($dynamicResult['segment_results'] as $segmentData) {
+                    $result = $segmentData['result'];
+                    $this->writeSegmentResult(
+                        $writer,
+                        $runLog,
+                        $usageType,
+                        $segmentData['segment'],
+                    );
+                }
+                $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+                return;
+            }
+
             // Ambil lookback_months (default 12), hitung matrix_count dinamis (Ref: IMPROVEMENT_PLAN_PD_CALCULATION Phase 2)
             $lookbackMonths = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::PdMigration,
@@ -111,10 +133,6 @@ class PdMigrationCalculationJob implements ShouldQueue
                 akadCode: $this->akadCode,
                 default: null,
             ) ?? 12;
-
-            $builder = new MigrationMatrixBuilder;
-            $calculator = new PdMigrationCalculator($builder, $matrixCount);
-            $writer = new SnapshotWriter;
 
             $pdRates = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
@@ -194,5 +212,90 @@ class PdMigrationCalculationJob implements ShouldQueue
             ]);
             throw $e;
         }
+    }
+
+    private function writeSegmentResult(
+        SnapshotWriter $writer,
+        CalculationRunLog $runLog,
+        UsageType $usageType,
+        array $segment,
+    ): void {
+        $officeCode = $segment['office_code'] ?? null;
+        $akadCode = $segment['akad_code'] ?? null;
+
+        $matrixCount = (int) CalculationDataRange::resolveValue(
+            CalculationMethodKey::PdMigration,
+            'pd_migration_matrix_count',
+            officeCode: $officeCode,
+            usageType: (int) $this->usageType,
+            akadCode: $akadCode,
+            default: null,
+        ) ?? 12;
+
+        $builder = new MigrationMatrixBuilder;
+        $calculator = new PdMigrationCalculator($builder, $matrixCount);
+
+        $pdRates = $calculator->calculate($usageType, $this->calculationPeriod, $officeCode, $akadCode);
+
+        $anchor = PeriodHelper::anchorQuarter($this->calculationPeriod);
+        $earliestEnd = PeriodHelper::shiftBack($anchor, ($matrixCount - 1) * 3);
+        $dataStart = PeriodHelper::shiftBack($earliestEnd, 12);
+        $dataEnd = $this->calculationPeriod;
+        $cohortCount = $matrixCount;
+
+        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $this->usageType);
+        $notes = sprintf(
+            "Dasar data PD Migration [%s]:\n"
+                ."- Sumber: financing_outstanding_quarterly (posisi awal & akhir matriks) + financing_account_periods (writeoff)\n"
+                ."- Filter: akad eligible: %s; akad 03 hanya jika JTP saat writeoff (maturity<=writeoff_date)\n"
+                ."- Anchor Quarter (T): %s; jumlah matriks migrasi = %d (M1=T, Mk = T - 3(k-1) bln), masing-masing dilacak 12 bln\n"
+                ."- Data range: %s s.d. %s\n"
+                .'- matrix_count=%d',
+            $usageType->label(),
+            AkadEligibilityService::formatCodes($akadCodes),
+            $anchor,
+            $matrixCount,
+            $dataStart,
+            $dataEnd,
+            $matrixCount,
+        );
+
+        $writer->writePdMigrationResult(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            dataStart: $dataStart,
+            dataEnd: $dataEnd,
+            cohortCount: $cohortCount,
+            pdRates: $pdRates,
+            notes: $notes,
+            officeCode: $officeCode,
+            akadCode: $akadCode,
+        );
+
+        $cohorts = $calculator->getCohorts($this->calculationPeriod);
+        $matrixRows = [];
+
+        foreach ($cohorts as [$startPeriod, $endPeriod]) {
+            foreach ($builder->buildRows($usageType, $startPeriod, $endPeriod, $officeCode, $akadCode) as $row) {
+                $matrixRows[] = [
+                    'from_quality_grade_id' => $row['from_quality_grade_id'],
+                    'to_quality_grade_id' => $row['to_quality_grade_id'],
+                    'cohort_period' => $startPeriod,
+                    'migration_rate' => $row['migration_rate'],
+                    'source_outstanding' => $row['source_outstanding'],
+                    'destination_outstanding' => $row['destination_outstanding'],
+                ];
+            }
+        }
+
+        $writer->writePdMigrationMatrix(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            rows: $matrixRows,
+            officeCode: $officeCode,
+            akadCode: $akadCode,
+        );
     }
 }

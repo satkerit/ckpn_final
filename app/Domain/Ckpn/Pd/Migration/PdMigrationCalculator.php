@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Pd\Migration;
 
 use App\Domain\Ckpn\Pd\Contracts\PdCalculationMethodInterface;
+use App\Domain\Ckpn\Pd\Netflow\DynamicSegmentationResolver;
 use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Enums\UsageType;
 use App\Models\QualityGrade;
+use Illuminate\Support\Collection;
 
 /**
  * Calculates PD using the Migration Matrix method.
@@ -120,5 +122,70 @@ final class PdMigrationCalculator implements PdCalculationMethodInterface
         }
 
         return $cohorts;
+    }
+
+    /**
+     * Calculate PD Migration dynamically per segment combinations.
+     * User pilih dimensi (office_code, akad_code), method hitung semua kombinasi.
+     * Ref: PRD Bab 5, Bab 8
+     *
+     * @param array<string> $segmentDimensions dimensi segmentasi yg diinginkan
+     * @return array{dimensions: array<string>, segment_results: array<array{segment: array, result: array}>, total_segments: int}
+     */
+    public function calculateDynamic(
+        UsageType $usageType,
+        string $calculationPeriod,
+        array $segmentDimensions = [],
+    ): array {
+        $resolver = new DynamicSegmentationResolver();
+
+        // Generate segment combinations (simplified: use outstanding quarterly as source data)
+        $rawData = $this->extractSegmentDataFromMatrix($usageType, $calculationPeriod);
+        $combinations = $resolver->generateSegmentCombinations($rawData, $segmentDimensions);
+
+        $results = [];
+        foreach ($combinations as $segment) {
+            $officeCode = $segment['office_code'] ?? null;
+            $akadCode = $segment['akad_code'] ?? null;
+
+            $result = $this->calculate($usageType, $calculationPeriod, $officeCode, $akadCode);
+            $results[] = [
+                'segment' => $segment,
+                'result' => $result,
+            ];
+        }
+
+        return [
+            'dimensions' => $segmentDimensions,
+            'segment_results' => $results,
+            'total_segments' => count($results),
+        ];
+    }
+
+    private function extractSegmentDataFromMatrix(UsageType $usageType, string $calculationPeriod): array
+    {
+        // Extract office_code & akad_code dari financing_outstanding_quarterly
+        $cohorts = $this->resolveCohorts($calculationPeriod);
+        $data = [];
+
+        foreach ($cohorts as [$startPeriod, $endPeriod]) {
+            $quarterlyData = \DB::table('financing_outstanding_quarterly')
+                ->select('financing_offices.office_code', 'financing_accounts.akad_code')
+                ->distinct()
+                ->join('financing_accounts', 'financing_outstanding_quarterly.financing_account_id', '=', 'financing_accounts.id')
+                ->join('financing_offices', 'financing_accounts.financing_office_id', '=', 'financing_offices.id')
+                ->where('financing_accounts.usage_type_id', '=', $usageType->value)
+                ->whereBetween('financing_outstanding_quarterly.period', [$startPeriod, $endPeriod])
+                ->get();
+
+            foreach ($quarterlyData as $row) {
+                $data[] = [
+                    'office_code' => $row->office_code,
+                    'akad_code' => $row->akad_code,
+                ];
+            }
+        }
+
+        return $data;
     }
 }

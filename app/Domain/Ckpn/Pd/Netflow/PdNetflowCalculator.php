@@ -10,6 +10,7 @@ use App\Domain\Ckpn\Services\PeriodHelper;
 use App\Domain\Ckpn\Services\RollingWindowResolver;
 use App\Enums\UsageType;
 use App\Models\Bucket;
+use Illuminate\Support\Collection;
 
 /**
  * Calculates PD using the Netflow method.
@@ -311,4 +312,59 @@ final class PdNetflowCalculator implements PdCalculationMethodInterface
 
         return $pdRates;
     }
+
+    /**
+     * Calculate PD dynamically per segment combinations.
+     * User pilih dimensi (office_code, akad_code, dll), method hitung semua kombinasi.
+     * Ref: PRD Bab 5, Bab 7
+     *
+     * @param array<string> $segmentDimensions dimensi segmentasi yg diinginkan
+     * @return array{dimensions: array<string>, segment_results: array<array{segment: array, result: array}>, total_segments: int}
+     */
+    public function calculateDynamic(
+        UsageType $usageType,
+        string $calculationPeriod,
+        array $segmentDimensions = [],
+    ): array {
+        $resolver = new DynamicSegmentationResolver();
+
+        // Load raw outstanding data untuk extract unique values per dimension
+        $outstandingStart = $this->windowResolver->outstandingStartPeriod($calculationPeriod);
+        $outstandingEnd = $this->windowResolver->outstandingEndPeriod($calculationPeriod);
+        $outstandingPeriods = PeriodHelper::range($outstandingStart, $outstandingEnd);
+
+        $eligibleAkadCodes = AkadEligibilityService::eligibleCodes(
+            AkadEligibilityService::KEY_PD_RATE,
+            $usageType->value,
+        );
+
+        // Load raw data untuk extract dimensions
+        $rawData = OutstandingMapLoader::loadRawForSegmentation(
+            $usageType->value,
+            $outstandingPeriods,
+            $eligibleAkadCodes,
+        );
+
+        // Generate all segment combinations
+        $combinations = $resolver->generateSegmentCombinations($rawData, $segmentDimensions);
+
+        $results = [];
+        foreach ($combinations as $segment) {
+            $officeCode = $segment['office_code'] ?? null;
+            $akadCode = $segment['akad_code'] ?? null;
+
+            $result = $this->calculate($usageType, $calculationPeriod, $officeCode, $akadCode);
+            $results[] = [
+                'segment' => $segment,
+                'result' => $result,
+            ];
+        }
+
+        return [
+            'dimensions' => $segmentDimensions,
+            'segment_results' => $results,
+            'total_segments' => count($results),
+        ];
+    }
 }
+

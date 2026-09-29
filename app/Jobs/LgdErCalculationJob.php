@@ -74,6 +74,8 @@ class LgdErCalculationJob implements ShouldQueue
         private readonly ?string $officeCode = null,
         /** NULL = konsolidasi semua akad; 'xxx' = pecahan per kode akad (level 2 segmentasi) */
         private readonly ?string $akadCode = null,
+        /** Dimensi dinamis untuk segmentasi (mis. ['office_code', 'akad_code']). Empty = legacy single calculate() */
+        private readonly array $segmentDimensions = [],
     ) {}
 
     /**
@@ -109,6 +111,24 @@ class LgdErCalculationJob implements ShouldQueue
         $runLog->update(['status' => RunStatus::Processing, 'started_at' => now()]);
 
         try {
+            $calculator = app(LgdExpectedRecoveriesCalculator::class);
+            $writer = new SnapshotWriter;
+
+            // Cabang: calculateDynamic() jika segmentDimensions disediakan, else single calculate()
+            if (!empty($this->segmentDimensions)) {
+                $dynamicResult = $calculator->calculateDynamic($usageType, $this->calculationPeriod, $this->segmentDimensions);
+                foreach ($dynamicResult['segment_results'] as $segmentData) {
+                    $this->writeSegmentResult(
+                        $writer,
+                        $runLog,
+                        $usageType,
+                        $segmentData['segment'],
+                    );
+                }
+                $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+                return;
+            }
+
             $windowYears = (int) CalculationDataRange::resolveValue(
                 CalculationMethodKey::LgdExpectedRecoveries,
                 'lgd_er_rolling_window_years',
@@ -126,9 +146,6 @@ class LgdErCalculationJob implements ShouldQueue
                 akadCode: $this->akadCode,
                 default: false,
             );
-
-            $calculator = new LgdExpectedRecoveriesCalculator($windowYears, $useAllAccount);
-            $writer = new SnapshotWriter;
 
             $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
             $dataStart = PeriodHelper::shiftBack($this->calculationPeriod, $windowYears * 12);
@@ -175,5 +192,75 @@ class LgdErCalculationJob implements ShouldQueue
             $runLog->update(['status' => RunStatus::Failed, 'error_message' => $e->getMessage(), 'completed_at' => now()]);
             throw $e;
         }
+    }
+
+    private function writeSegmentResult(
+        SnapshotWriter $writer,
+        CalculationRunLog $runLog,
+        UsageType $usageType,
+        array $segment,
+    ): void {
+        $officeCode = $segment['office_code'] ?? null;
+        $akadCode = $segment['akad_code'] ?? null;
+
+        $windowYears = (int) CalculationDataRange::resolveValue(
+            CalculationMethodKey::LgdExpectedRecoveries,
+            'lgd_er_rolling_window_years',
+            officeCode: $officeCode,
+            usageType: $this->usageType,
+            akadCode: $akadCode,
+            default: 5,
+        );
+
+        $useAllAccount = (bool) CalculationDataRange::resolveValue(
+            CalculationMethodKey::LgdExpectedRecoveries,
+            'lgd_er_use_all_account',
+            officeCode: $officeCode,
+            usageType: $this->usageType,
+            akadCode: $akadCode,
+            default: false,
+        );
+
+        $calculator = app(LgdExpectedRecoveriesCalculator::class);
+        $calculator->setWindowYears($windowYears);
+        $calculator->setUseAllAccount($useAllAccount);
+        $details = $calculator->calculateWithDetails($usageType, $this->calculationPeriod, $officeCode, $akadCode);
+        $dataStart = PeriodHelper::shiftBack($this->calculationPeriod, $windowYears * 12);
+
+        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_LGD_RATE, $this->usageType);
+        $notes = sprintf(
+            "Dasar data LGD Expected Recoveries [%s]:\n"
+                ."- Sumber: financing_account_periods (writeoff_status NOT NULL, writeoff_date terisi)\n"
+                ."- Filter: writeoff_date dlm window %d thn ke belakang dari periode; akad eligible: %s; akad 03 hanya jika maturity<=writeoff_date\n"
+                ."- Window: %d thn; periode writeoff: [%s, %s]\n"
+                ."- Fallback all-account: %s\n"
+                .'- total_writeoff=%.2f; total_recovery=%.2f',
+            $usageType->label(),
+            $windowYears,
+            AkadEligibilityService::formatCodes($akadCodes),
+            $windowYears,
+            $dataStart,
+            $this->calculationPeriod,
+            $details['is_all_account'] ? 'YA (segmen kosong)' : 'TIDAK',
+            $details['total_writeoff'],
+            $details['total_recovery'],
+        );
+
+        $writer->writeLgdErResult(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            dataStart: $dataStart,
+            dataEnd: $this->calculationPeriod,
+            windowYears: $windowYears,
+            lgdRate: $details['lgd_rate'],
+            expectedRecoveryRate: $details['expected_recovery_rate'],
+            totalWriteoff: $details['total_writeoff'],
+            totalRecovery: $details['total_recovery'],
+            isAllAccount: $details['is_all_account'],
+            notes: $notes,
+            officeCode: $officeCode,
+            akadCode: $akadCode,
+        );
     }
 }

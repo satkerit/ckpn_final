@@ -13,14 +13,6 @@ use Illuminate\Database\Eloquent\Collection;
  */
 final class BucketingService
 {
-    /** @var Collection<int, Bucket> */
-    private Collection $buckets;
-
-    public function __construct()
-    {
-        $this->buckets = Bucket::orderBy('bucket_order')->get();
-    }
-
     /**
      * Menentukan bucket_id berdasarkan jumlah hari tunggakan (overdue days).
      *
@@ -36,7 +28,9 @@ final class BucketingService
      */
     public function resolveBucketId(int $overdueDays): ?int
     {
-        foreach ($this->buckets as $bucket) {
+        $buckets = Bucket::orderBy('bucket_order')->get();
+
+        foreach ($buckets as $bucket) {
             $min = $bucket->min_days_overdue;
             $max = $bucket->max_days_overdue;
 

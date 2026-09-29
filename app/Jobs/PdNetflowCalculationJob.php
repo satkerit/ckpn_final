@@ -16,6 +16,7 @@ use App\Enums\RunStatus;
 use App\Enums\UsageType;
 use App\Models\CalculationDataRange;
 use App\Models\CalculationRunLog;
+use App\Models\CalculationSegmentationConfig;
 use App\Models\DataQualityAnomaly;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -61,6 +62,8 @@ class PdNetflowCalculationJob implements ShouldQueue
         private readonly ?string $officeCode = null,
         /** NULL = konsolidasi semua akad; 'xx' = pecahan per kode akad (level 3 segmentasi) */
         private readonly ?string $akadCode = null,
+        /** Dimensi segmentasi dinamis: ['office_code', 'akad_code'] dll. Empty = no dynamic segmentation */
+        private readonly array $segmentDimensions = [],
     ) {}
 
     /**
@@ -121,6 +124,18 @@ class PdNetflowCalculationJob implements ShouldQueue
             $validator = new BucketMovementValidator;
             $calculator = new PdNetflowCalculator($resolver, $validator);
             $writer = new SnapshotWriter;
+
+            // Use calculateDynamic() if segmentDimensions provided, otherwise single calculate()
+            if (!empty($this->segmentDimensions)) {
+                $dynamicResult = $calculator->calculateDynamic($usageType, $this->calculationPeriod, $this->segmentDimensions);
+                // Process each segment result
+                foreach ($dynamicResult['segment_results'] as $segmentData) {
+                    $result = $segmentData['result'];
+                    $this->writeSegmentResult($writer, $runLog, $usageType, $resolver, $windowMonths, $forwardMonths, $result, $segmentData['segment']);
+                }
+                $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+                return;
+            }
 
             $result = $calculator->calculate($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
 
@@ -237,7 +252,72 @@ class PdNetflowCalculationJob implements ShouldQueue
                 'error_message' => $e->getMessage(),
                 'completed_at' => now(),
             ]);
+
             throw $e;
         }
+    }
+
+    private function writeSegmentResult(
+        SnapshotWriter $writer,
+        CalculationRunLog $runLog,
+        UsageType $usageType,
+        RollingWindowResolver $resolver,
+        int $windowMonths,
+        int $forwardMonths,
+        array $result,
+        array $segment,
+    ): void {
+        $segmentOfficeCode = $segment['office_code'] ?? null;
+        $segmentAkadCode = $segment['akad_code'] ?? null;
+
+        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_PD_RATE, $this->usageType);
+        $notes = sprintf(
+            "Segmentasi PD Netflow [%s] — office: %s, akad: %s\n"
+                ."- Sumber: financing_account_periods via PdNetflowBaseline\n"
+                ."- Window: rolling_window=%d bln, forward_projection=%d bln\n"
+                ."- Jumlah baris historis dipakai: %d",
+            $usageType->label(),
+            $segmentOfficeCode ?? 'ALL',
+            $segmentAkadCode ?? 'ALL',
+            $windowMonths,
+            $forwardMonths,
+            $result['history']['row_count'],
+        );
+
+        $writer->writePdNetflowResult(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            dataStart: $resolver->rateStartPeriod($this->calculationPeriod),
+            dataEnd: $this->calculationPeriod,
+            windowMonths: $windowMonths,
+            pdRates: $result['pd_rates'],
+            pdRatesPerAkad: $result['pd_rates_per_akad'] ?? null,
+            notes: $notes,
+            officeCode: $segmentOfficeCode,
+        );
+
+        $writer->writePdNetflowDetail(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            transitionRates: $result['transition_rates'],
+            compoundRates: $result['compound_rates'],
+            outstandingMap: $result['outstanding_map'],
+            projPeriods: $result['proj_periods'],
+            rateStart: $result['rate_start'],
+            compoundEnd: $result['compound_end'],
+            officeCode: $segmentOfficeCode,
+            akadCode: $segmentAkadCode,
+        );
+
+        $writer->writePdNetflowHistory(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            history: $result['history'],
+            officeCode: $segmentOfficeCode,
+            akadCode: $segmentAkadCode,
+        );
     }
 }

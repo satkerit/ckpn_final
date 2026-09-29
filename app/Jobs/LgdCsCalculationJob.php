@@ -67,6 +67,8 @@ class LgdCsCalculationJob implements ShouldQueue
         private readonly ?string $officeCode = null,
         /** NULL = konsolidasi semua akad; 'xxx' = pecahan per kode akad (level 2 segmentasi) */
         private readonly ?string $akadCode = null,
+        /** Dimensi dinamis untuk segmentasi (mis. ['office_code', 'akad_code']). Empty = legacy single calculate() */
+        private readonly array $segmentDimensions = [],
     ) {}
 
     /**
@@ -102,6 +104,21 @@ class LgdCsCalculationJob implements ShouldQueue
         try {
             $calculator = app(LgdCollateralShortfallCalculator::class);
             $writer = new SnapshotWriter;
+
+            // Cabang: calculateDynamic() jika segmentDimensions disediakan, else single calculate()
+            if (!empty($this->segmentDimensions)) {
+                $dynamicResult = $calculator->calculateDynamic($usageType, $this->calculationPeriod, $this->segmentDimensions);
+                foreach ($dynamicResult['segment_results'] as $segmentData) {
+                    $this->writeSegmentResult(
+                        $writer,
+                        $runLog,
+                        $usageType,
+                        $segmentData['segment'],
+                    );
+                }
+                $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+                return;
+            }
 
             $accountResults = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $this->officeCode, $this->akadCode);
             $aggregate = $calculator->aggregate($accountResults);
@@ -145,5 +162,52 @@ class LgdCsCalculationJob implements ShouldQueue
             $runLog->update(['status' => RunStatus::Failed, 'error_message' => $e->getMessage(), 'completed_at' => now()]);
             throw $e;
         }
+    }
+
+    private function writeSegmentResult(
+        SnapshotWriter $writer,
+        CalculationRunLog $runLog,
+        UsageType $usageType,
+        array $segment,
+    ): void {
+        $officeCode = $segment['office_code'] ?? null;
+        $akadCode = $segment['akad_code'] ?? null;
+
+        $calculator = app(LgdCollateralShortfallCalculator::class);
+        $accountResults = $calculator->calculatePerAccount($usageType, $this->calculationPeriod, $officeCode, $akadCode);
+        $aggregate = $calculator->aggregate($accountResults);
+
+        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_LGD_RATE, $this->usageType);
+        $notes = sprintf(
+            "Dasar data LGD Collateral Shortfall [%s]:\n"
+                ."- Sumber: financing_account_periods (collectibility=5 ATAU writeoff_status='W') + collaterals (estimated_sale_value / appraisal_value*(1-discount))\n"
+                ."- Filter: akad 03 hanya jika JTP; HARUS punya agunan aktif ber-nilai; outstanding>0\n"
+                ."- Nilai jual bersih = estimated_sale_value (jika ada) ATAU appraisal_value*(1-discount)\n"
+                .'- account_count=%d; total_outstanding=%.2f; total_shortfall=%.2f',
+            $usageType->label(),
+            $aggregate['account_count'],
+            $aggregate['total_outstanding'],
+            $aggregate['total_shortfall'],
+        );
+
+        $writer->writeLgdCsResults(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            accountResults: $accountResults,
+            notes: $notes,
+            officeCode: $officeCode,
+            akadCode: $akadCode,
+        );
+
+        $writer->writeLgdCsBySegmentResult(
+            runLog: $runLog,
+            usageType: $usageType,
+            calculationPeriod: $this->calculationPeriod,
+            aggregate: $aggregate,
+            notes: $notes,
+            officeCode: $officeCode,
+            akadCode: $akadCode,
+        );
     }
 }

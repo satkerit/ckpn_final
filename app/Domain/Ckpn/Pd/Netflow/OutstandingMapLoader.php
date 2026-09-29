@@ -251,4 +251,34 @@ final class OutstandingMapLoader
 
         return $detail;
     }
+
+    /**
+     * Load raw outstanding data (minimal structure) untuk dimension extraction.
+     * Return: [['office_code' => 'K001', 'akad_code' => '01', 'bucket_id' => 1, 'period' => '202401', 'outstanding' => 1000], ...]
+     */
+    public static function loadRawForSegmentation(
+        int $usageTypeValue,
+        array $periods,
+        ?array $akadCodes = null,
+    ): array {
+        $query = \DB::table('financing_account_periods')
+            ->select('financing_offices.office_code', 'financing_accounts.akad_code', 'financing_account_periods.bucket_id', 'financing_account_periods.period', 'financing_account_periods.outstanding_balance')
+            ->join('financing_accounts', 'financing_account_periods.financing_account_id', '=', 'financing_accounts.id')
+            ->join('financing_offices', 'financing_accounts.financing_office_id', '=', 'financing_offices.id')
+            ->where('financing_accounts.usage_type_id', '=', $usageTypeValue)
+            ->whereIn('financing_account_periods.period', $periods);
+
+        if ($akadCodes !== null && count($akadCodes) > 0) {
+            $query->whereIn('financing_accounts.akad_code', $akadCodes);
+        }
+
+        return $query->get()->map(fn ($row) => [
+            'office_code' => $row->office_code,
+            'akad_code' => $row->akad_code,
+            'bucket_id' => $row->bucket_id,
+            'period' => $row->period,
+            'outstanding' => (float) $row->outstanding_balance,
+        ])->toArray();
+    }
 }
+

@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Lgd\CollateralShortfall;
 
 use App\Domain\Ckpn\Lgd\Contracts\LgdCalculationMethodInterface;
+use App\Domain\Ckpn\Pd\Netflow\DynamicSegmentationResolver;
 use App\Domain\Ckpn\Services\AkadCalculationRulesRepository;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
 use App\Models\Collateral;
 use App\Models\FinancingAccount;
 use App\Models\FinancingAccountPeriod;
+use Illuminate\Support\Collection;
 
 /**
  * Calculates LGD using the Collateral Shortfall method.
@@ -209,5 +211,61 @@ final class LgdCollateralShortfallCalculator implements LgdCalculationMethodInte
         }
 
         return $totalNetValue;
+    }
+
+    /**
+     * Calculate LGD CS dynamically per segment combinations.
+     * User pilih dimensi (office_code, akad_code), method hitung semua kombinasi.
+     * Ref: PRD Bab 5, Bab 10
+     *
+     * @param array<string> $segmentDimensions dimensi segmentasi yg diinginkan
+     * @return array{dimensions: array<string>, segment_results: array<array{segment: array, result: float}>, total_segments: int}
+     */
+    public function calculateDynamic(
+        UsageType $usageType,
+        string $calculationPeriod,
+        array $segmentDimensions = [],
+    ): array {
+        $resolver = new DynamicSegmentationResolver();
+
+        // Extract segment data dari financing_accounts dengan collateral
+        $rawData = $this->extractSegmentDataFromCollateral($usageType, $calculationPeriod);
+        $combinations = $resolver->generateSegmentCombinations($rawData, $segmentDimensions);
+
+        $results = [];
+        foreach ($combinations as $segment) {
+            $officeCode = $segment['office_code'] ?? null;
+            $akadCode = $segment['akad_code'] ?? null;
+
+            $result = $this->calculate($usageType, $calculationPeriod, $officeCode, $akadCode);
+            $results[] = [
+                'segment' => $segment,
+                'result' => $result,
+            ];
+        }
+
+        return [
+            'dimensions' => $segmentDimensions,
+            'segment_results' => $results,
+            'total_segments' => count($results),
+        ];
+    }
+
+    private function extractSegmentDataFromCollateral(UsageType $usageType, string $calculationPeriod): array
+    {
+        // Extract office_code & akad_code dari financing_accounts dengan collateral
+        $data = FinancingAccount::select('financing_offices.office_code', 'financing_accounts.akad_code')
+            ->distinct()
+            ->join('financing_offices', 'financing_accounts.financing_office_id', '=', 'financing_offices.id')
+            ->whereHas('collaterals')
+            ->where('financing_accounts.usage_type_id', '=', $usageType->value)
+            ->get()
+            ->map(fn ($account) => [
+                'office_code' => $account->office_code,
+                'akad_code' => $account->akad_code,
+            ])
+            ->toArray();
+
+        return $data;
     }
 }

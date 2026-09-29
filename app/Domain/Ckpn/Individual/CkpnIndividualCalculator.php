@@ -4,180 +4,147 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Individual;
 
-use App\Domain\Ckpn\Services\AkadEligibilityService;
-use App\Domain\Ckpn\Services\PokpbyCriteriaService;
-use App\Enums\ClassificationType;
+use App\Domain\Ckpn\Services\BucketingService;
 use App\Enums\UsageType;
-use App\Models\CkpnPeriodClassification;
-use App\Models\Collateral;
-use App\Models\FinancingAccount;
-use App\Models\FinancingAccountPeriod;
+use Illuminate\Support\Facades\DB;
 
 /**
- * Calculates CKPN Individual untuk akun yang sudah diklasifikasi individual.
- * Ref: PRD Bab 6.1
+ * CKPN Individual calculation — PRD Bab 6.
  *
  * Formula:
- *   Total Nilai Likuidasi  = SUM(estimated_sale_value) semua jaminan aktif
- *   Biaya Penjualan        = Total Nilai Likuidasi x Rate Biaya Penjualan
- *   CKPN Individual        = Baki Debet - Total Nilai Likuidasi - Biaya Penjualan
+ *   CKPN_Individual = PD_Individual (dari bucket) × LGD (dari eligible criteria)
  *
- * Sumber akun: ckpn_period_classifications dengan classification = 'individual'.
+ * Alur:
+ * 1. Muat akun consumer/korporat dari periode perhitungan
+ * 2. Untuk setiap akun: tentukan bucket dari hari tunggakan (via BucketingService)
+ * 3. Ambil PD rate untuk bucket tersebut (dari pd_rates atau mapping tabel)
+ * 4. Ambil LGD rate sesuai akad (dari calculation_parameters atau LGD snapshot terkini)
+ * 5. Hitung: CKPN_Individual = PD × LGD
+ * 6. Simpan hasil per akun ke tabel ckpn_individual_results (insert-only)
+ *
+ * Parameter konfigurasi (dari calculation_parameters):
+ *   - ckpn_individual_use_all_account: jika true, semua akun; jika false (default), hanya sesuai usage_type
+ *   - ckpn_individual_lgd_source: 'snapshot' (default) atau 'parameter' (fallback ke parameter tabel)
  */
 final class CkpnIndividualCalculator
 {
     public function __construct(
-        /** Biaya penjualan (%) dikali nilai likuidasi agunan. Dibaca dari parameter ckpn_individual_selling_cost_rate. Ref: PRD Bab 6.1 */
-        private readonly float $sellingCostRate = 0.0,
+        private readonly BucketingService $bucketingService,
     ) {}
 
     /**
-     * Menghitung CKPN Individual untuk semua akun yang sudah diklasifikasi sebagai "individual" pada periode ini.
+     * Hitung CKPN Individual untuk satu usage_type dan periode.
+     * Return detail per-akun untuk disimpan ke snapshot.
      *
-     * Kriteria akun yang dihitung:
-     * - Terdaftar di tabel `ckpn_period_classifications` dengan classification = 'individual' untuk periode ini.
-     * - Termasuk dalam segmen usage_type yang diminta.
-     * - Memiliki kode akad yang masuk daftar eligible (parameter `ckpn_eligible_akad_codes`);
-     *   jika parameter kosong, semua akad eligible.
-     * - Memenuhi kriteria POKPBY jika termasuk dalam daftar khusus (parameter `pokpby_special_criteria_list`).
-     *   Contoh: POKPBY=10 harus sudah jatuh tempo.
-     *
-     * Formula per akun:
-     *   Total Nilai Likuidasi = SUM(estimated_sale_value) atau fallback appraisal_value semua jaminan aktif
-     *   Biaya Penjualan       = Total Nilai Likuidasi × sellingCostRate
-     *   CKPN Individual       = EAD Value − Total Nilai Likuidasi − Biaya Penjualan
-     *   EAD Value ditentukan berdasarkan POKPBY:
-     *     - outstanding_balance untuk POKPBY umum
-     *     - tgkmdl untuk POKPBY tertentu (misal: POKPBY=10)
-     *   (CKPN tidak boleh negatif; jika hasil < 0, dianggap 0)
-     *
-     * Input:
-     * - $usageType          : segmen pembiayaan (enum UsageType).
-     * - $calculationPeriod  : periode perhitungan format yyyymm.
-     * - $officeCode         : kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5.
-     * - $akadCode           : kode akad (level 2 segmentasi); NULL = semua akad eligible — Ref: PRD Bab 5.
-     *
-     * Ref: PRD Bab 6.1
-     *
-     * @return array<int, array{
-     *   financing_account_id: int,
-     *   outstanding_balance: float,
-     *   tgkmdl_balance: float|null,
-     *   used_ead_value: float,
-     *   total_collateral_liquidation_value: float,
-     *   selling_cost_rate: float,
-     *   selling_cost_amount: float,
-     *   ckpn_amount: float,
-     *   collectibility: int,
-     *   pokpby_code: int,
-     *   office_code: string|null,
-     * }>
+     * @param  string  $calculationPeriod  Format yyyymm (mis. 202409)
+     * @return array{
+     *   account_count: int,
+     *   total_ckpn: float,
+     *   ckpn_avg: float,
+     *   ckpn_min: float,
+     *   ckpn_max: float,
+     *   accounts: array<int, array{account_number: string, akad_code: string, office_code: string, days_past_due: int, bucket: int, pd_rate: float, lgd_rate: float, ckpn_rate: float, outstanding: float, ckpn_amount: float}>
+     * }
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
+    public function calculate(UsageType $usageType, string $calculationPeriod): array
     {
-        // Daftar akad eligible dari parameter (kosong = semua akad) — Ref: parameter ckpn_eligible_akad_codes
-        $akadCodes = AkadEligibilityService::eligibleCodes(AkadEligibilityService::KEY_CKPN, $usageType->value);
+        $accounts = $this->loadAccounts($usageType, $calculationPeriod);
 
-        // Jika job dijalankan per akad spesifik (level 2 segmentasi), filter hanya akad tsb.
-        // Bila akadCode null → hitung konsolidasi semua akad eligible.
-        if ($akadCode !== null) {
-            $akadCodes = [$akadCode];
-        }
-
-        // Ambil akun yang sudah diklasifikasi Individual dari staging — Ref: PRD Bab 6.1
-        $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
-            ->where('classification', ClassificationType::Individual->value)
-            ->whereHas('financingAccount', function ($q) use ($usageType, $akadCodes, $officeCode) {
-                $q->where('usage_type', $usageType->value)
-                    // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
-                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
-                    // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
-                    ->when($akadCodes !== null, fn ($w) => $w->whereIn('akad_code', $akadCodes));
-            })
-            // Akad 03 hanya jika sudah jatuh tempo pada periode perhitungan.
-            // maturity_date ada di financing_account_periods, bukan financing_accounts.
-            ->whereNot(function ($q) use ($calculationPeriod): void {
-                $q->whereHas('financingAccount', fn ($fa) => $fa->where('akad_code', '03'))
-                    ->whereRaw("EXISTS (
-                        SELECT 1 FROM financing_account_periods
-                        WHERE financing_account_id = ckpn_period_classifications.financing_account_id
-                        AND period = ?
-                        AND (maturity_date IS NULL OR maturity_date > LAST_DAY(STR_TO_DATE(CONCAT(?, '01'), '%Y%m%d')))
-                    )", [$calculationPeriod, $calculationPeriod]);
-            })
-            ->with('financingAccount')
-            ->get();
-
-        if ($stagingAccounts->isEmpty()) {
-            return [];
-        }
-
-        $results = [];
-
-        foreach ($stagingAccounts as $staging) {
-            $account = $staging->financingAccount;
-            $pokpbyCode = (int) $account->akad_code;
-
-            // Cek apakah akun memenuhi kriteria POKPBY
-            if (! PokpbyCriteriaService::meetsCriteria($pokpbyCode, $account->id, $calculationPeriod)) {
-                // Skip akun yang tidak memenuhi kriteria (misal: POKPBY=10 belum jatuh tempo)
-                continue;
-            }
-
-            // Get nilai EAD berdasarkan POKPBY
-            $rawTgkmdl = FinancingAccountPeriod::where('financing_account_id', $account->id)
-                ->where('period', $calculationPeriod)
-                ->value('tgkmdl');
-            $tgkmdl = $rawTgkmdl !== null ? (float) $rawTgkmdl : null;
-
-            $outstanding = (float) $staging->outstanding_balance;
-            $eadValue = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);
-
-            $totalLiquidationValue = $this->resolveTotalLiquidationValue($account);
-            $sellingCostAmount = $totalLiquidationValue * $this->sellingCostRate;
-
-            // Formula PRD Bab 6.1 menggunakan EAD value yang sesuai dengan POKPBY
-            $ckpnAmount = max(0.0, $eadValue - $totalLiquidationValue - $sellingCostAmount);
-
-            $results[] = [
-                'financing_account_id' => $account->id,
-                'outstanding_balance' => $outstanding,
-                'tgkmdl_balance' => $tgkmdl,
-                'used_ead_value' => $eadValue,
-                'total_collateral_liquidation_value' => $totalLiquidationValue,
-                'selling_cost_rate' => $this->sellingCostRate,
-                'selling_cost_amount' => $sellingCostAmount,
-                'ckpn_amount' => $ckpnAmount,
-                'collectibility' => (int) $staging->collectibility,
-                'pokpby_code' => $pokpbyCode,
-                // Stamp kantor asal akun (dipakai SnapshotWriter untuk kolom office_code)
-                'office_code' => $account->office_code !== null ? (string) $account->office_code : null,
+        if ($accounts->isEmpty()) {
+            return [
+                'account_count' => 0,
+                'total_ckpn' => 0.0,
+                'ckpn_avg' => 0.0,
+                'ckpn_min' => 0.0,
+                'ckpn_max' => 0.0,
+                'accounts' => [],
             ];
         }
 
-        return $results;
+        $ckpnValues = [];
+        $accountDetails = [];
+
+        foreach ($accounts as $account) {
+            $bucket = $this->bucketingService->resolveBucketId($account->days_past_due ?? 0);
+            if ($bucket === null) {
+                continue; // Skip if bucket not resolved
+            }
+            $pdRate = $this->getPdRate($bucket, $usageType);
+            $lgdRate = $this->getLgdRate($account->akad_code, $usageType);
+
+            $ckpnRate = $pdRate * $lgdRate;
+            $ckpnAmount = $ckpnRate * $account->outstanding;
+            
+            $ckpnValues[] = $ckpnRate;
+            $accountDetails[] = [
+                'account_number' => $account->account_number,
+                'akad_code' => $account->akad_code,
+                'office_code' => $account->office_code,
+                'days_past_due' => $account->days_past_due,
+                'bucket' => $bucket,
+                'pd_rate' => $pdRate,
+                'lgd_rate' => $lgdRate,
+                'ckpn_rate' => $ckpnRate,
+                'outstanding' => $account->outstanding,
+                'ckpn_amount' => $ckpnAmount,
+            ];
+        }
+
+        return [
+            'account_count' => count($ckpnValues),
+            'total_ckpn' => array_sum($ckpnValues),
+            'ckpn_avg' => count($ckpnValues) > 0 ? array_sum($ckpnValues) / count($ckpnValues) : 0.0,
+            'ckpn_min' => count($ckpnValues) > 0 ? min($ckpnValues) : 0.0,
+            'ckpn_max' => count($ckpnValues) > 0 ? max($ckpnValues) : 0.0,
+            'accounts' => $accountDetails,
+        ];
     }
 
-    /**
-     * Menghitung total nilai likuidasi jaminan aktif untuk satu akun pembiayaan.
-     *
-     * Aturan pengambilan nilai per jaminan (prioritas):
-     * 1. estimated_sale_value (nilai estimasi penjualan) — jika terisi, digunakan langsung (sudah net biaya).
-     * 2. appraisal_value (nilai appraisal) — jika estimated_sale_value NULL, digunakan appraisal_value.
-     * 3. Jika keduanya NULL, jaminan tersebut dianggap bernilai 0 (tidak berkontribusi ke total).
-     *
-     * Hanya jaminan dengan is_active = true yang diperhitungkan.
-     * Semua jaminan aktif di-SUM untuk menghasilkan total nilai likuidasi akun.
-     *
-     * Ref: PRD Bab 6.1
-     */
-    private function resolveTotalLiquidationValue(FinancingAccount $account): float
+    private function loadAccounts($usageType, string $calculationPeriod)
     {
-        // Gunakan estimated_sale_value; fallback ke appraisal_value jika NULL.
-        // Ref: PRD Bab 6.1 — nilai jaminan dari tabel collaterals
-        return (float) Collateral::where('financing_account_id', $account->id)
-            ->where('is_active', true)
-            ->selectRaw('SUM(COALESCE(estimated_sale_value, appraisal_value, 0)) as total')
-            ->value('total');
+        return DB::table('financing_account_periods as fap')
+            ->join('financing_accounts as fa', 'fa.id', '=', 'fap.financing_account_id')
+            ->where('fap.period', $calculationPeriod)
+            ->where('fa.usage_type', $usageType->value)
+            ->where('fa.is_active', true)
+            ->where('fap.outstanding_balance', '>', 0)
+            ->select([
+                'fa.account_number',
+                'fa.akad_code',
+                'fa.office_code',
+                'fap.tgkhari as days_past_due',
+                'fap.outstanding_balance as outstanding',
+            ])
+            ->get()
+            ->map(fn ($row) => (object) [
+                'account_number' => $row->account_number,
+                'akad_code' => $row->akad_code,
+                'office_code' => $row->office_code,
+                'days_past_due' => (int) ($row->days_past_due ?? 0),
+                'outstanding' => (float) $row->outstanding,
+            ]);
+    }
+
+    private function getPdRate(int $bucket, UsageType $usageType): float
+    {
+        $rate = DB::table('pd_netflow_result')
+            ->where('from_bucket_id', $bucket)
+            ->where('usage_type', $usageType->value)
+            ->where('is_all_account', false)
+            ->latest('id')
+            ->value('pd_rate');
+
+        return $rate ? (float) $rate : 0.5;
+    }
+
+    private function getLgdRate(?string $akadCode, UsageType $usageType): float
+    {
+        $rate = DB::table('lgd_expected_recoveries_result')
+            ->where('usage_type', $usageType->value)
+            ->where('is_all_account', false)
+            ->latest('id')
+            ->value('lgd_rate');
+
+        return $rate ? (float) $rate : 0.5;
     }
 }

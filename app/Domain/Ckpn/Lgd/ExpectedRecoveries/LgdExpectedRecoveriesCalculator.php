@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Domain\Ckpn\Lgd\ExpectedRecoveries;
 
 use App\Domain\Ckpn\Lgd\Contracts\LgdCalculationMethodInterface;
+use App\Domain\Ckpn\Pd\Netflow\DynamicSegmentationResolver;
 use App\Domain\Ckpn\Services\AkadCalculationRulesRepository;
 use App\Domain\Ckpn\Services\AkadEligibilityService;
 use App\Enums\UsageType;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -301,5 +303,71 @@ final class LgdExpectedRecoveriesCalculator implements LgdCalculationMethodInter
         $month = (int) substr($period, 4, 2);
 
         return date('Y-m-t', mktime(0, 0, 0, $month, 1, $year));
+    }
+
+    /**
+     * Calculate LGD ER dynamically per segment combinations.
+     * User pilih dimensi (office_code, akad_code), method hitung semua kombinasi.
+     * Ref: PRD Bab 5, Bab 9
+     *
+     * @param array<string> $segmentDimensions dimensi segmentasi yg diinginkan
+     * @return array{dimensions: array<string>, segment_results: array<array{segment: array, result: float}>, total_segments: int}
+     */
+    public function calculateDynamic(
+        UsageType $usageType,
+        string $calculationPeriod,
+        array $segmentDimensions = [],
+    ): array {
+        $resolver = new DynamicSegmentationResolver();
+
+        // Extract segment data dari financing_account_periods
+        $rawData = $this->extractSegmentDataFromWriteoff($usageType, $calculationPeriod);
+        $combinations = $resolver->generateSegmentCombinations($rawData, $segmentDimensions);
+
+        $results = [];
+        foreach ($combinations as $segment) {
+            $officeCode = $segment['office_code'] ?? null;
+            $akadCode = $segment['akad_code'] ?? null;
+
+            $result = $this->calculate($usageType, $calculationPeriod, $officeCode, $akadCode);
+            $results[] = [
+                'segment' => $segment,
+                'result' => $result,
+            ];
+        }
+
+        return [
+            'dimensions' => $segmentDimensions,
+            'segment_results' => $results,
+            'total_segments' => count($results),
+        ];
+    }
+
+    private function extractSegmentDataFromWriteoff(UsageType $usageType, string $calculationPeriod): array
+    {
+        // Extract office_code & akad_code dari financing_accounts dengan writeoff records
+        $windowStart = $this->getWindowStartYear($calculationPeriod);
+
+        $data = DB::table('financing_accounts')
+            ->select('financing_offices.office_code', 'financing_accounts.akad_code')
+            ->distinct()
+            ->join('financing_offices', 'financing_accounts.financing_office_id', '=', 'financing_offices.id')
+            ->where('financing_accounts.usage_type_id', '=', $usageType->value)
+            ->where('financing_accounts.writeoff_status', '!=', null)
+            ->whereRaw("YEAR(financing_accounts.writeoff_date) >= ?", [$windowStart])
+            ->get()
+            ->map(fn ($row) => [
+                'office_code' => $row->office_code,
+                'akad_code' => $row->akad_code,
+            ])
+            ->toArray();
+
+        return $data;
+    }
+
+    private function getWindowStartYear(string $calculationPeriod): int
+    {
+        $year = (int) substr($calculationPeriod, 0, 4);
+        return $year - $this->windowYears;
     }
 }
