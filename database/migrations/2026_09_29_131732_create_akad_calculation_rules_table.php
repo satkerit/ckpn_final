@@ -41,9 +41,4 @@ return new class extends Migration
             $table->index('akad_code');
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('akad_calculation_rules');
-    }
 };

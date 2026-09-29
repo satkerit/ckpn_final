@@ -7,6 +7,7 @@ namespace Database\Factories;
 use App\Models\CalculationRunLog;
 use App\Models\CkpnCollectiveResult;
 use App\Models\FinancingAccount;
+use App\Models\RiskSegment;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -23,7 +24,7 @@ class CkpnCollectiveResultFactory extends Factory
         return [
             'calculation_run_log_id' => CalculationRunLog::factory(),
             'financing_account_id' => FinancingAccount::factory(),
-            'usage_type' => $this->faker->randomElement([1, 2, 3]),
+            'risk_segment_id' => RiskSegment::factory(),
             'calculation_period' => $this->faker->numerify('20####'),
             'pd_method_used' => $this->faker->randomElement(['netflow', 'migration']),
             'pd_rate' => $pdRate,
@@ -31,6 +32,8 @@ class CkpnCollectiveResultFactory extends Factory
             'lgd_rate' => $lgdRate,
             'ead' => $ead,
             'ckpn_amount' => $pdRate * $lgdRate * $ead,
+            'pd_bucket_id' => null,
+            'pd_quality_grade_id' => null,
         ];
     }
 }

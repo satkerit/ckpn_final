@@ -1,3 +1,39 @@
+## [2026-09-29] Phase 21 — CKPN Individual Calculation (PD × LGD per Account)
+
+**Status**: ✅ Done
+
+**Modul**: CKPN Individual - Per-Account Snapshot Calculation
+
+**Ref PRD**: Bab 6.1 — CKPN Individual = PD_rate × LGD_rate × Outstanding per account
+
+**Perubahan**:
+
+- Implemented `CkpnIndividualCalculator` with formula: CKPN_rate = PD_rate (from latest PdNetflowResult per bucket) × LGD_rate (from latest LgdExpectedRecoveriesResult)
+- Fixed `BucketingService` to lazy-load buckets on each query (removed constructor cache that caused test isolation issues)
+- Created `CkpnIndividualResult` model + migration for per-account snapshot storage
+- Implemented `CkpnIndividualCalculationJob` with idempotency guards (skip if Completed/Approved) + per-account snapshot writing
+- Created `CkpnIndividualResultResource` (Filament read-only viewer) with period & usage_type filters
+- Created `DispatchCkpnIndividualCalculationAction` (Filament form action to trigger job)
+- Rewrote `CkpnIndividualFeatureTest` (3 tests) from old collateral-based design to new PD×LGD formula
+- Fixed test fixture issues: bucket seeding via `DB::table()->insertOrIgnore()` (transaction-safe), removed non-existent `is_all_account` filter from PD query
+
+**File utama berubah**:
+
+- `app/Domain/Ckpn/Individual/CkpnIndividualCalculator.php` (updated: lazy-load buckets, handle null bucket resolution)
+- `app/Domain/Ckpn/Services/BucketingService.php` (updated: removed constructor caching)
+- `app/Models/CkpnIndividualResult.php` (NEW)
+- `app/Jobs/CkpnIndividualCalculationJob.php` (updated snapshot writing)
+- `app/Filament/Resources/CkpnIndividualResultResource.php` (NEW)
+- `app/Filament/Actions/DispatchCkpnIndividualCalculationAction.php` (NEW)
+- `database/migrations/2026_09_29_*_create_ckpn_individual_results_table.php` (verified)
+- `tests/Feature/CkpnIndividualFeatureTest.php` (rewritten for PD×LGD design)
+
+**Test**: ✅ 3 Phase 21 tests pass + full suite 96 tests pass, 1 skipped, 0 failures
+
+**Next**: Wire DispatchCkpnIndividualCalculationAction into Filament UI (CalculationBatchPage or dashboard), register CkpnIndividualResultResource navigation, create E2E test for full job dispatch→snapshot flow.
+
+---
+
 ## [2026-09-29] Kebijakan Agent — Konfirmasi Operasi Destruktif
 
 **Status**: ✅ Done

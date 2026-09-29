@@ -32,9 +32,4 @@ return new class extends Migration
             $table->index(['calculation_period', 'usage_type']);
         });
     }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('ckpn_individual_results');
-    }
 };

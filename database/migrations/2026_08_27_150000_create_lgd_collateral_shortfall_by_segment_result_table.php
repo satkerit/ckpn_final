@@ -21,12 +21,14 @@ return new class extends Migration
             $table->foreignId('calculation_run_log_id')
                 ->constrained('calculation_run_log', indexName: 'lgd_cs_by_segment_run_log_fk');
             $table->unsignedTinyInteger('usage_type')->nullable();
+            $table->string('office_code')->nullable();
             $table->string('calculation_period', 6)->index('lgd_cs_by_segment_period_index');
             $table->unsignedInteger('account_count')->default(0);
             $table->decimal('total_outstanding', 20, 2)->default(0);
             $table->decimal('total_collateral_net_value', 20, 2)->default(0);
             $table->decimal('total_shortfall', 20, 2)->default(0);
             $table->decimal('avg_lgd_rate', 8, 6)->default(0);
+            $table->text('notes')->nullable();
 
             $table->unique(['calculation_run_log_id', 'usage_type'], 'lgd_cs_by_segment_run_log_utype_unique');
         });

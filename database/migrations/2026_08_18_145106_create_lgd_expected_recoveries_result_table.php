@@ -21,6 +21,9 @@ return new class extends Migration
             $table->decimal('expected_recovery_rate', 10, 8)->notNull()->default(0);
             $table->decimal('lgd_rate', 10, 8)->notNull()->default(0);
             $table->boolean('is_all_account')->default(false);
+            $table->string('usage_type')->nullable();
+            $table->string('office_code')->nullable();
+            $table->text('notes')->nullable();
             $table->timestamp('created_at')->useCurrent();
 
             // risk_segment_id nullable: unique per run per segment (NULL treated as distinct per DB)

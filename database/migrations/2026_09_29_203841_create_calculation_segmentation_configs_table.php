@@ -23,12 +23,4 @@ return new class extends Migration
             $table->index('is_active');
         });
     }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::dropIfExists('calculation_segmentation_configs');
-    }
 };

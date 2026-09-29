@@ -7,11 +7,13 @@ namespace App\Models;
 use App\Enums\UsageType;
 use App\Models\Concerns\HasOfficeSegmentScope;
 use App\Models\Concerns\SnapshotImmutability;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class LgdExpectedRecoveriesResult extends Model
 {
+    use HasFactory;
     use HasOfficeSegmentScope;
     use SnapshotImmutability;
 

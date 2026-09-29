@@ -33,11 +33,5 @@ return new class extends Migration
         });
     }
 
-    public function down(): void
-    {
-        Schema::table('ckpn_period_classifications', function (Blueprint $table) {
-            $table->dropIndex('idx_segmentation');
-            $table->dropColumnIfExists(['office_code', 'akad_code']);
-        });
-    }
+
 };

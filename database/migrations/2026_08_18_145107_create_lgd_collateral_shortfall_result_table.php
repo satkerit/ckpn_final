@@ -13,11 +13,14 @@ return new class extends Migration
             $table->foreignId('calculation_run_log_id')->constrained('calculation_run_log')->restrictOnDelete();
             $table->foreignId('financing_account_id')->constrained('financing_accounts')->restrictOnDelete();
             $table->foreignId('risk_segment_id')->nullable()->constrained('risk_segments')->restrictOnDelete();
+            $table->string('usage_type')->nullable();
+            $table->string('office_code')->nullable();
             $table->char('calculation_period', 6)->notNull();
             $table->decimal('outstanding_balance', 20, 2)->notNull()->default(0);
             $table->decimal('collateral_net_value', 20, 2)->notNull()->default(0);
             $table->decimal('shortfall', 20, 2)->notNull()->default(0);
             $table->decimal('lgd_rate', 10, 8)->notNull()->default(0);
+            $table->text('notes')->nullable();
             $table->timestamp('created_at')->useCurrent();
 
             $table->unique(['calculation_run_log_id', 'financing_account_id'], 'lgd_cs_run_log_acc_unique');

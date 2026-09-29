@@ -17,10 +17,16 @@ return new class extends Migration
             $table->foreignId('risk_segment_id')->constrained('risk_segments')->restrictOnDelete();
             $table->foreignId('from_bucket_id')->constrained('buckets')->restrictOnDelete();
             $table->char('calculation_period', 6)->notNull();
+            $table->tinyInteger('usage_type')->nullable();
+            $table->string('office_code', 10)->nullable();
+            $table->string('akad_code', 2)->nullable();
             $table->decimal('pd_rate', 10, 8)->notNull()->default(0);
+            $table->integer('total_accounts')->nullable();
+            $table->decimal('total_outstanding', 18, 2)->nullable();
             $table->char('data_period_start', 6)->notNull();
             $table->char('data_period_end', 6)->notNull();
             $table->tinyInteger('window_months')->notNull();
+            $table->text('notes')->nullable();
             $table->timestamp('created_at')->useCurrent();
 
             $table->unique(['calculation_run_log_id', 'risk_segment_id', 'from_bucket_id'], 'pd_nf_run_log_seg_bucket_unique');

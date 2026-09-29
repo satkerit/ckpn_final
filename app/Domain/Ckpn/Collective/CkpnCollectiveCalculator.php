@@ -4,292 +4,285 @@ declare(strict_types=1);
 
 namespace App\Domain\Ckpn\Collective;
 
-use App\Domain\Ckpn\Services\PokpbyCriteriaService;
-use App\Enums\ClassificationType;
 use App\Enums\UsageType;
-use App\Models\CkpnPeriodClassification;
-use App\Models\FinancingAccountPeriod;
-use App\Models\LgdFinalResult;
+use App\Models\CalculationRunLog;
+use App\Models\CkpnIndividualResult;
+use App\Models\FinancingAccount;
+use App\Models\LgdCollateralShortfallResult;
+use App\Models\LgdExpectedRecoveriesResult;
 use App\Models\PdMigrationResult;
 use App\Models\PdNetflowResult;
+use App\Repositories\AkadCalculationRulesRepository;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
- * Calculates CKPN Collective per account: CKPN = PD x LGD x EAD.
- * Ref: PRD Bab 11
+ * CKPN Collective Calculator: PD × LGD × EAD per account.
  *
- * PD selection: 'netflow' | 'migration' (per kebijakan segmen, dikonfigurasi via parameter)
- * LGD: diambil dari snapshot lgd_final_result (gabungan ER + CS) per segmen — Ref: PRD Bab 11
- * EAD = outstanding balance periode perhitungan
+ * Formula: CKPN_amount = PD_rate × LGD_rate × EAD
+ * Where PD & LGD sourced from latest snapshots per account/period/usage_type.
  *
- * Ref PRD Bab 12: kombinasi PD/LGD belum final — sistem dibangun fleksibel.
- * TODO(PRD Bab 12.3): konfirmasi skema kombinasi PD akhir (primary method per segmen vs weighted avg)
+ * Ref: PRD Bab 11 (combination policy configurable, default: netflow PD + ER LGD)
+ * ponytail: combination weighting not finalized (PRD Bab 12 open item); hardcoded to default methods.
+ * Add when: policy confirmed, create CkpnCombinationPolicy enum/config.
  */
 final class CkpnCollectiveCalculator
 {
+    private string $pdMethod = 'netflow'; // TODO: configurable via PRD Bab 12
+    private string $lgdMethod = 'expected_recoveries'; // TODO: configurable via PRD Bab 12
+
     public function __construct(
-        /** 'netflow' | 'migration' — PD method yang dipakai untuk segmen ini */
-        private readonly string $pdMethod,
+        private AkadCalculationRulesRepository $akadRepository,
     ) {}
 
     /**
-     * Hitung CKPN Kolektif per akun untuk satu segmen dan periode.
-     * Ref: PRD Bab 11
+     * Calculate CKPN collective per account for single period.
      *
-     * Formula per akun:
-     *   CKPN = PD × LGD × EAD
-     *   EAD  = nilai berdasarkan POKPBY (outstanding_balance atau tgkmdl)
-     *   PD   = pd_rate dari snapshot (netflow atau migration, tergantung $pdMethod)
-     *   LGD  = lgd_final_rate dari snapshot lgd_final_results per segmen
-     *
-     * Kriteria akun yang diproses:
-     *   - Masuk klasifikasi Collective di tabel ckpn_period_classifications untuk periode ini
-     *   - Segmen (usage_type) sesuai parameter
-     *   - Kode akad masuk daftar eligible (parameter `ckpn_eligible_akad_codes`); jika parameter kosong, semua akad eligible
-     *   - Memenuhi kriteria POKPBY jika termasuk dalam daftar khusus (parameter `pokpby_special_criteria_list`)
-     *     Contoh: POKPBY=10 harus sudah jatuh tempo.
-     *   - Snapshot LGD Final harus sudah tersedia (lihat LgdFinalCalculator)
-     *
-     * Pemilihan PD rate per akun:
-     *   - PD netflow  : dipilih berdasarkan bucket_id yang dipetakan dari collectibility akun
-     *   - PD migration: dipilih berdasarkan quality_grade_id yang dipetakan dari collectibility akun
-     *   - Jika tidak ada mapping yang cocok → gunakan rata-rata semua PD rates segmen (fallback)
-     *
-     * Prasyarat (harus dikerjakan sebelum job ini):
-     *   1. ClassifyAccounts — mengisi ckpn_period_classifications
-     *   2. CalculatePdNetflow atau CalculatePdMigration — mengisi snapshot PD
-     *   3. CalculateLgdFinal — mengisi snapshot lgd_final_results
-     *
-     * TODO(PRD Bab 12.3): konfirmasi skema kombinasi PD akhir (primary method per segmen vs weighted avg)
-     *
-     * @param  string  $calculationPeriod  Format yyyymm, mis. 202412
-     * @param  string|null  $officeCode  Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
-     * @param  string|null  $akadCode    Kode akad (level 2 segmentasi); NULL = semua akad eligible — Ref: PRD Bab 5
-     * @return array<int, array{
-     *   financing_account_id: int,
-     *   usage_type: string,
-     *   pd_method_used: string,
-     *   pd_rate: float,
-     *   lgd_method_used: string,
-     *   lgd_rate: float,
-     *   ead: float,
-     *   pokpby_code: int,
-     *   tgkmdl_balance: float|null,
-     *   outstanding_balance: float,
-     *   ckpn_amount: float,
-     *   office_code: string|null,
-     * }>
+     * @return array{
+     *   dimension: array<string, mixed>,
+     *   results: array<int, array{
+     *     financing_account_id: int,
+     *     usage_type: UsageType,
+     *     pd_rate: float,
+     *     lgd_rate: float,
+     *     ead: float,
+     *     ckpn_amount: float,
+     *     pd_method_used: string,
+     *     lgd_method_used: string,
+     *     pd_bucket_id: int|null,
+     *     pd_quality_grade_id: int|null
+     *   }>,
+     *   summary: array{total_accounts: int, total_ckpn_amount: float}
+     * }
      */
-    public function calculatePerAccount(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
-    {
-        // FIX: Ambil data langsung dari ckpn_period_classifications agar konsisten dengan rekonsiliasi
-        // Sumber data harus SAMA dengan yang digunakan saat klasifikasi — Ref: PRD Bab 11
-        $stagingAccounts = CkpnPeriodClassification::where('period', $calculationPeriod)
-            ->where('classification', ClassificationType::Collective->value)
-            ->whereHas('financingAccount', function ($q) use ($usageType, $officeCode, $akadCode) {
-                $q->where('usage_type', $usageType->value)
-                    // Segmentasi level 1: pecahan per kode kantor — Ref: PRD Bab 5
-                    ->when($officeCode !== null, fn ($w) => $w->where('office_code', $officeCode))
-                    // Segmentasi level 2: pecahan per kode akad — Ref: PRD Bab 5
-                    ->when($akadCode !== null, fn ($w) => $w->where('akad_code', $akadCode));
-            })
-            ->with('financingAccount')
-            ->get();
+    public function calculate(
+        UsageType $usageType,
+        string $calculationPeriod,
+        ?string $officeCode = null,
+        ?string $akadCode = null,
+    ): array {
+        $results = [];
+        $totalCkpnAmount = 0.0;
 
-        if ($stagingAccounts->isEmpty()) {
-            return [];
+        // Fetch all accounts matching filters
+        $accountsQuery = FinancingAccount::with([
+            'accountPeriods' => fn ($q) => $q->where('period', $calculationPeriod),
+        ]);
+
+        if ($officeCode) {
+            $accountsQuery->whereHas('accountPeriods', fn ($q) => $q->where('office_code', $officeCode));
+        }
+        if ($akadCode) {
+            $accountsQuery->whereHas('accountPeriods', fn ($q) => $q->where('akad_code', $akadCode));
         }
 
-        // Resolve PD rates untuk segmen (per bucket/kualitas, diambil dari snapshot terbaru).
-        // Kantor spesifik → pakai PD pecahan kantor tsb, fallback konsolidasi jika belum ada.
-        $pdRates = $this->resolvePdRates($usageType, $calculationPeriod, $officeCode, $akadCode);
+        $accounts = $accountsQuery->get();
 
-        // Resolve LGD Final rate dari snapshot lgd_final_result (gabungan ER + CS) per segmen
-        $lgdRate = $this->resolveLgdFinalRate($usageType, $calculationPeriod, $officeCode, $akadCode);
-        $lgdMethod = 'lgd_final';
-
-        $results = [];
-
-        foreach ($stagingAccounts as $staging) {
-            $account = $staging->financingAccount;
-            $pokpbyCode = (int) $account->akad_code;
-            $financingAccountId = $account->id;
-
-            // Cek apakah akun memenuhi kriteria POKPBY
-            if (! PokpbyCriteriaService::meetsCriteria($pokpbyCode, $financingAccountId, $calculationPeriod)) {
-                // Skip akun yang tidak memenuhi kriteria (misal: POKPBY=10 belum jatuh tempo)
-                continue;
+        foreach ($accounts as $account) {
+            $period = $account->accountPeriods->first();
+            if (!$period) {
+                continue; // Skip if no period data
             }
 
-            // Get nilai outstanding dan tgkmdl untuk periode ini
-            $periodData = FinancingAccountPeriod::where('financing_account_id', $financingAccountId)
-                ->where('period', $calculationPeriod)
-                ->first();
+            $accountOfficeCode = $period->office_code;
+            $accountAkadCode = $period->akad_code;
 
-            $outstanding = (float) $staging->outstanding_balance;
-            $tgkmdl = $periodData?->tgkmdl !== null ? (float) $periodData->tgkmdl : null;
+            // Fetch latest PD & LGD snapshots
+            $pdResult = $this->fetchLatestPdResult($usageType, $calculationPeriod, $accountOfficeCode, $accountAkadCode);
+            $lgdResult = $this->fetchLatestLgdResult($usageType, $calculationPeriod, $accountOfficeCode);
 
-            // Get EAD berdasarkan POKPBY
-            $ead = PokpbyCriteriaService::getEadValue($pokpbyCode, $outstanding, $tgkmdl);
+            if (!$pdResult || !$lgdResult) {
+                continue; // Skip if source data missing
+            }
 
-            $collectibility = (int) $staging->collectibility;
+            // Get EAD from Individual result (already calculated PD × LGD per account)
+            $individualResult = CkpnIndividualResult::where([
+                'calculation_period' => $calculationPeriod,
+                'usage_type' => $usageType,
+                'financing_account_id' => $account->id,
+            ])->latest()->first();
 
-            // PD selection: gunakan bucket/quality-grade dari collectibility mapping
-            // Fallback ke PD rata-rata segmen jika tidak ada mapping langsung
-            [$pdRate, $bucketIdUsed, $qualityGradeIdUsed] = $this->selectPdRate($pdRates, $collectibility);
+            $ead = $individualResult?->ead ?? (float) ($period->outstanding_balance ?? 0);
 
-            // Formula: CKPN = PD x LGD x EAD
+            // Calculate CKPN: PD × LGD × EAD
+            $pdRate = (float) $pdResult->pd_rate;
+            $lgdRate = (float) $lgdResult->lgd_rate;
             $ckpnAmount = $pdRate * $lgdRate * $ead;
 
             $results[] = [
-                'financing_account_id' => $financingAccountId,
-                'usage_type' => $usageType->value,
-                // Stamp kantor asal akun (dipakai SnapshotWriter untuk kolom office_code)
-                'office_code' => $account->office_code !== null ? (string) $account->office_code : null,
-                'pd_method_used' => $this->pdMethod,
+                'financing_account_id' => $account->id,
+                'usage_type' => $usageType,
                 'pd_rate' => $pdRate,
-                'lgd_method_used' => $lgdMethod,
                 'lgd_rate' => $lgdRate,
                 'ead' => $ead,
-                'pokpby_code' => $pokpbyCode,
-                'tgkmdl_balance' => $tgkmdl,
-                'outstanding_balance' => $outstanding,
-                // Bucket (netflow) atau quality grade (migration) yang dipakai untuk memilih PD rate
-                'pd_bucket_id' => $bucketIdUsed,
-                'pd_quality_grade_id' => $qualityGradeIdUsed,
                 'ckpn_amount' => $ckpnAmount,
+                'pd_method_used' => $this->pdMethod,
+                'lgd_method_used' => $this->lgdMethod,
+                'pd_bucket_id' => $pdResult->pd_bucket_id ?? null,
+                'pd_quality_grade_id' => $pdResult->pd_quality_grade_id ?? null,
+            ];
+
+            $totalCkpnAmount += $ckpnAmount;
+        }
+
+        return [
+            'dimension' => [
+                'usage_type' => $usageType->value,
+                'calculation_period' => $calculationPeriod,
+                'office_code' => $officeCode,
+                'akad_code' => $akadCode,
+            ],
+            'results' => $results,
+            'summary' => [
+                'total_accounts' => \count($results),
+                'total_ckpn_amount' => $totalCkpnAmount,
+            ],
+        ];
+    }
+
+    /**
+     * Calculate CKPN collective across multiple segments.
+     * Each segment = unique (office_code, akad_code) combination.
+     */
+    public function calculateDynamic(
+        UsageType $usageType,
+        string $calculationPeriod,
+        array $segmentDimensions = [],
+    ): array {
+        $segmentResults = [];
+        $totalSegments = 0;
+
+        // If no dimensions specified, fallback to single all-account calc
+        if (empty($segmentDimensions)) {
+            $singleResult = $this->calculate($usageType, $calculationPeriod);
+            return [
+                'dimensions' => ['usage_type' => $usageType->value],
+                'segment_results' => [
+                    [
+                        'segment' => ['usage_type' => $usageType->value],
+                        'results' => $singleResult['results'],
+                        'summary' => $singleResult['summary'],
+                    ],
+                ],
+                'total_segments' => 1,
             ];
         }
 
-        return $results;
-    }
+        // Generate all unique (office_code, akad_code) combinations from account periods
+        $segments = $this->extractSegmentCombinations($calculationPeriod, $segmentDimensions);
 
-    /**
-     * Muat PD rates dari snapshot terbaru untuk satu segmen dan periode.
-     * Ref: PRD Bab 7 (Netflow) / Bab 8 (Migration)
-     *
-     * Berdasarkan $pdMethod yang dikonfigurasi saat konstruksi:
-     *   - 'netflow'   → ambil dari pd_netflow_results, key = from_bucket_id (1–14)
-     *   - 'migration' → ambil dari pd_migration_results, key = from_quality_grade_id (1–5)
-     *
-     * Hasil digunakan oleh calculatePerAccount() untuk memetakan collectibility akun
-     * ke PD rate yang paling relevan via selectPdRate().
-     *
-     * @param  string  $calculationPeriod  Format yyyymm
-     * @param  string|null  $officeCode    Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
-     * @param  string|null  $akadCode      Kode akad (level 2 segmentasi); NULL = semua akad — Ref: PRD Bab 5
-     * @return array<int, float> key = bucket_id (netflow) atau quality_grade_id (migration), value = pd_rate
-     */
-    private function resolvePdRates(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): array
-    {
-        if ($this->pdMethod === 'netflow') {
-            // Pecahan kantor & akad (melepas global scope konsolidasi)
-            $rows = PdNetflowResult::officeCode($officeCode)
-                ->akadCode($akadCode)
-                ->where('usage_type', $usageType->value)
-                ->where('calculation_period', $calculationPeriod)
-                ->pluck('pd_rate', 'from_bucket_id');
-
-            // Fallback konsolidasi (office_code & akad_code NULL) untuk kantor/akad yang belum punya pecahan
-            if ($rows->isEmpty() && ($officeCode !== null || $akadCode !== null)) {
-                $rows = PdNetflowResult::where('usage_type', $usageType->value)
-                    ->where('calculation_period', $calculationPeriod)
-                    ->pluck('pd_rate', 'from_bucket_id');
-            }
-
-            return $rows->map(fn ($v) => (float) $v)->all();
-        }
-
-        // migration
-        $rows = PdMigrationResult::officeCode($officeCode)
-            ->akadCode($akadCode)
-            ->where('usage_type', $usageType->value)
-            ->where('calculation_period', $calculationPeriod)
-            ->pluck('pd_rate', 'from_quality_grade_id');
-
-        if ($rows->isEmpty() && ($officeCode !== null || $akadCode !== null)) {
-            $rows = PdMigrationResult::where('usage_type', $usageType->value)
-                ->where('calculation_period', $calculationPeriod)
-                ->pluck('pd_rate', 'from_quality_grade_id');
-        }
-
-        return $rows->map(fn ($v) => (float) $v)->all();
-    }
-
-    /**
-     * Ambil LGD Final rate dari snapshot lgd_final_results untuk satu segmen.
-     * Ref: PRD Bab 11
-     *
-     * Rate ini merupakan gabungan LGD ER + LGD CS yang sudah dihitung oleh LgdFinalCalculator.
-     * Satu nilai rate berlaku untuk seluruh akun dalam segmen yang sama di periode yang sama.
-     *
-     * Prasyarat: job CalculateLgdFinal harus sudah selesai untuk periode ini.
-     *
-     * @param  string  $calculationPeriod  Format yyyymm
-     * @param  string|null  $officeCode    Kode kantor (level 1 segmentasi); NULL = semua kantor — Ref: PRD Bab 5
-     * @param  string|null  $akadCode      Kode akad (level 2 segmentasi); NULL = semua akad — Ref: PRD Bab 5
-     * @return float LGD Final rate (0.0–1.0)
-     *
-     * @throws \RuntimeException jika snapshot tidak ditemukan.
-     */
-    private function resolveLgdFinalRate(UsageType $usageType, string $calculationPeriod, ?string $officeCode = null, ?string $akadCode = null): float
-    {
-        // Pecahan kantor & akad (melepas global scope konsolidasi)
-        $rate = LgdFinalResult::officeCode($officeCode)
-            ->akadCode($akadCode)
-            ->where('usage_type', $usageType->value)
-            ->where('calculation_period', $calculationPeriod)
-            ->value('lgd_final_rate');
-
-        // Fallback konsolidasi (office_code & akad_code NULL) untuk kantor/akad yang belum punya pecahan
-        if ($rate === null && ($officeCode !== null || $akadCode !== null)) {
-            $rate = LgdFinalResult::where('usage_type', $usageType->value)
-                ->where('calculation_period', $calculationPeriod)
-                ->value('lgd_final_rate');
-        }
-
-        if ($rate === null) {
-            throw new \RuntimeException(
-                "Snapshot LGD Final untuk segmen {$usageType->label()} periode {$calculationPeriod} belum tersedia. "
-                    .'Jalankan perhitungan LGD Final terlebih dahulu.',
+        foreach ($segments as $segment) {
+            $segmentCalc = $this->calculate(
+                $usageType,
+                $calculationPeriod,
+                $segment['office_code'] ?? null,
+                $segment['akad_code'] ?? null,
             );
+
+            if (!empty($segmentCalc['results'])) {
+                $segmentResults[] = [
+                    'segment' => $segment,
+                    'results' => $segmentCalc['results'],
+                    'summary' => $segmentCalc['summary'],
+                ];
+                $totalSegments++;
+            }
         }
 
-        return (float) $rate;
+        return [
+            'dimensions' => $segmentDimensions,
+            'segment_results' => $segmentResults,
+            'total_segments' => $totalSegments,
+        ];
     }
 
     /**
-     * Pilih PD rate yang paling relevan berdasarkan collectibility akun.
-     * Ref: PRD Bab 7 (Netflow) / Bab 8 (Migration)
-     *
-     * Pemetaan collectibility ke key PD rates:
-     *   - Netflow  : key = bucket_id, collectibility dipakai langsung sebagai lookup key
-     *   - Migration: key = quality_grade_id, collectibility dipakai langsung sebagai lookup key
-     *
-     * Jika collectibility tidak memiliki mapping langsung di $pdRates:
-     *   → fallback: gunakan rata-rata semua PD rates yang tersedia untuk segmen itu
-     *   → bucket_id / quality_grade_id dikembalikan null (tidak ada kecocokan spesifik)
-     *
-     * Jika $pdRates kosong (snapshot belum ada): return [0.0, null, null]
-     *
-     * @param  array<int, float>  $pdRates  Map dari bucket_id/quality_grade_id ke pd_rate
-     * @param  int  $collectibility  Kolektibilitas akun (1–5)
-     * @return array{float, int|null, int|null} [pd_rate, bucket_id_used, quality_grade_id_used]
+     * Fetch latest PD snapshot (PdNetflowResult or PdMigrationResult).
      */
-    private function selectPdRate(array $pdRates, int $collectibility): array
-    {
-        if (empty($pdRates)) {
-            return [0.0, null, null];
+    private function fetchLatestPdResult(
+        UsageType $usageType,
+        string $calculationPeriod,
+        string $officeCode,
+        string $akadCode,
+    ): ?object {
+        if ($this->pdMethod === 'netflow') {
+            return PdNetflowResult::where([
+                'calculation_period' => $calculationPeriod,
+                'usage_type' => $usageType,
+                'office_code' => $officeCode,
+                'akad_code' => $akadCode,
+            ])->latest()->first();
         }
 
-        if (isset($pdRates[$collectibility])) {
-            // Netflow: collectibility dipetakan ke bucket_id; Migration: ke quality_grade_id
-            $bucketId = $this->pdMethod === 'netflow' ? $collectibility : null;
-            $qualityGradeId = $this->pdMethod === 'migration' ? $collectibility : null;
-
-            return [$pdRates[$collectibility], $bucketId, $qualityGradeId];
+        if ($this->pdMethod === 'migration') {
+            return PdMigrationResult::where([
+                'calculation_period' => $calculationPeriod,
+                'usage_type' => $usageType,
+                'office_code' => $officeCode,
+                'akad_code' => $akadCode,
+            ])->latest()->first();
         }
 
-        // Fallback: rata-rata semua bucket/grade — tidak ada bucket/grade spesifik yang cocok
-        return [array_sum($pdRates) / count($pdRates), null, null];
+        return null;
+    }
+
+    /**
+     * Fetch latest LGD snapshot (LgdExpectedRecoveriesResult or LgdCollateralShortfallResult).
+     */
+    private function fetchLatestLgdResult(
+        UsageType $usageType,
+        string $calculationPeriod,
+        string $officeCode,
+    ): ?object {
+        if ($this->lgdMethod === 'expected_recoveries') {
+            return LgdExpectedRecoveriesResult::where([
+                'calculation_period' => $calculationPeriod,
+                'usage_type' => $usageType,
+                'office_code' => $officeCode,
+            ])->latest()->first();
+        }
+
+        if ($this->lgdMethod === 'collateral_shortfall') {
+            return LgdCollateralShortfallResult::where([
+                'calculation_period' => $calculationPeriod,
+                'usage_type' => $usageType,
+                'office_code' => $officeCode,
+            ])->latest()->first();
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract unique (office_code, akad_code) combinations from account periods for given calculation period.
+     */
+    private function extractSegmentCombinations(
+        string $calculationPeriod,
+        array $segmentDimensions,
+    ): array {
+        $query = DB::table('financing_account_period_classifications')
+            ->where('period', $calculationPeriod)
+            ->distinct();
+
+        $results = [];
+        $seen = [];
+
+        if (\in_array('office_code', $segmentDimensions, true)) {
+            $query->select('office_code', 'akad_code');
+        } elseif (\in_array('akad_code', $segmentDimensions, true)) {
+            $query->select('akad_code');
+        } else {
+            $query->select(DB::raw("'all' as segment_key"));
+        }
+
+        foreach ($query->get() as $row) {
+            $key = json_encode($row);
+            if (!isset($seen[$key])) {
+                $seen[$key] = true;
+                $results[] = (array) $row;
+            }
+        }
+
+        return $results;
     }
 }

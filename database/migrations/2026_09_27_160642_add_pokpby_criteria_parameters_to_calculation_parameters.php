@@ -19,43 +19,7 @@ return new class extends Migration
      */
     public function up(): void
     {
-        DB::table('calculation_parameters')->insert([
-            // Parameter daftar POKPBY yang memerlukan kriteria khusus
-            [
-                'usage_type' => null,
-                'parameter_key' => 'pokpby_special_criteria_list',
-                'parameter_value' => '10', // Daftar dipisahkan koma: '10,11,12'
-                'description' => 'Daftar kode POKPBY (Jenis Akad) yang memerlukan kriteria khusus dalam perhitungan CKPN/EAD',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-            // Parameter mapping POKPBY ke kriteria jatuh tempo
-            [
-                'usage_type' => null,
-                'parameter_key' => 'pokpby_require_maturity',
-                'parameter_value' => '10=1', // Format: POKPBY=1 (harus jatuh tempo), POKPBY=0 (tidak)
-                'description' => 'Mapping POKPBY ke requirement jatuh tempo: 1=harus sudah jatuh tempo, 0=tidak perlu',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-            // Parameter mapping POKPBY ke field EAD yang digunakan
-            [
-                'usage_type' => null,
-                'parameter_key' => 'pokpby_ead_field',
-                'parameter_value' => '10=tgkmdl', // Format: POKPBY=field_name (tgkmdl atau outstanding_balance)
-                'description' => 'Mapping POKPBY ke field yang digunakan untuk EAD: tgkmdl atau outstanding_balance',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-            // Parameter default EAD field jika POKPBY tidak ada dalam mapping
-            [
-                'usage_type' => null,
-                'parameter_key' => 'default_ead_field',
-                'parameter_value' => 'outstanding_balance',
-                'description' => 'Field default untuk EAD jika POKPBY tidak ada dalam mapping (tgkmdl atau outstanding_balance)',
-                'created_at' => now(),
-                'updated_at' => now(),
-            ],
-        ]);
+        // Calculation parameters migrated to new schema (calculation_column_configs).
+        // This data seeded by CalculationParameterSeeder instead — skip.
     }
 };

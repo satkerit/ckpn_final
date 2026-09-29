@@ -65,6 +65,11 @@ return new class extends Migration
      */
     private function addOfficeColumn(string $table, string $after): void
     {
+        // Guard: if the "after" column doesn't exist, add after id instead
+        if ($after && ! Schema::hasColumn($table, $after)) {
+            $after = 'id';
+        }
+
         if (! Schema::hasColumn($table, 'office_code')) {
             Schema::table($table, function (Blueprint $blueprint) use ($after): void {
                 $blueprint->string('office_code', 10)->nullable()->after($after);
