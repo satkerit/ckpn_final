@@ -32,12 +32,31 @@ use Throwable;
 
 /**
  * Synchronous runner menggantikan semua Queue Job kalkulasi.
- * Setiap method = verbatim logic dari handle() job yang dihapus.
+ * Setiap method = verbatim logic dari handle() job yang dihapus, plus batch insert untuk memory safety.
  * Memory strategy: ini_set 512M + array_chunk batch insert 500 baris.
  * Ref: PRD Bab 7, 8, 9, 10, 11, 6.1
  */
 final class SyncCalculationService
 {
+    private int $totalProcessed = 0;
+    private int $totalRows = 0;
+
+    /**
+     * Batch insert dengan progress broadcast real-time.
+     * Panggil sebelum insert: $this->totalRows = count($rows)
+     */
+    private function batchInsertWithProgress(string $table, array &$rows, string $statusText = 'Menyimpan data...'): void
+    {
+        $this->totalProcessed = 0;
+        foreach (array_chunk($rows, 500) as $idx => $chunk) {
+            DB::table($table)->insert($chunk);
+            $this->totalProcessed = min(($idx + 1) * 500, count($rows));
+            ProgressBroadcastService::updateWithCounter($this->totalProcessed, count($rows), $statusText);
+            unset($chunk);
+        }
+        unset($rows);
+    }
+
     // -------------------------------------------------------------------------
     // PD Netflow — Ref: PRD Bab 7
     // -------------------------------------------------------------------------
@@ -83,6 +102,8 @@ final class SyncCalculationService
             $resolver = new RollingWindowResolver($windowMonths, $forwardMonths);
             $calculator = new PdNetflowCalculator($resolver, new BucketMovementValidator);
             $writer = new SnapshotWriter;
+
+            ProgressBroadcastService::start('Perhitungan PD Netflow: ' . $calculationPeriod);
 
             if (! empty($segmentDimensions)) {
                 $dynamicResult = $calculator->calculateDynamic($usageType, $calculationPeriod, $segmentDimensions);
@@ -201,6 +222,7 @@ final class SyncCalculationService
 
             $finalStatus = $criticalCount > 0 ? RunStatus::CompletedWithWarning : RunStatus::Completed;
             $runLog->update(['status' => $finalStatus, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('PD Netflow ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -397,6 +419,7 @@ final class SyncCalculationService
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+                ProgressBroadcastService::complete('PD Migration ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -576,6 +599,7 @@ final class SyncCalculationService
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('LGD Expected Recoveries ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -731,6 +755,7 @@ final class SyncCalculationService
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('LGD Collateral Shortfall ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -822,6 +847,7 @@ final class SyncCalculationService
             );
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('LGD Final ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -837,14 +863,11 @@ final class SyncCalculationService
     // Batch insert 500 rows per chunk (memory-safe)
     // -------------------------------------------------------------------------
 
-    /**
-     * @param  array<string>  $segmentDimensions
-     */
     public function runCkpnCollective(
         CalculationRunLog $runLog,
         UsageType $usageType,
         string $calculationPeriod,
-        array $segmentDimensions = [],
+        ?string $officeCode = null,
     ): void {
         ini_set('memory_limit', '512M');
 
@@ -857,24 +880,21 @@ final class SyncCalculationService
         try {
             $calculator = app(CkpnCollectiveCalculator::class);
 
-            if (! empty($segmentDimensions)) {
-                $result = $calculator->calculateDynamic($usageType, $calculationPeriod, $segmentDimensions);
-                foreach ($result['segment_results'] as $segmentResult) {
-                    $this->batchInsertCkpnCollective($runLog, $calculationPeriod, $segmentResult);
-                }
-            } else {
-                $result = $calculator->calculate($usageType, $calculationPeriod);
-                $this->batchInsertCkpnCollective($runLog, $calculationPeriod, [
-                    'segment' => [
-                        'usage_type' => $usageType->value,
-                        'calculation_period' => $calculationPeriod,
-                    ],
-                    'results' => $result['results'],
-                    'summary' => $result['summary'],
-                ]);
-            }
+            // Simple segmentation: one office_code per call (dispatcher sends per-segment)
+            $result = $calculator->calculate($usageType, $calculationPeriod, $officeCode);
+            
+            $this->batchInsertCkpnCollective($runLog, $calculationPeriod, [
+                'segment' => [
+                    'usage_type' => $usageType->value,
+                    'calculation_period' => $calculationPeriod,
+                    'office_code' => $officeCode,
+                ],
+                'results' => $result['results'],
+                'summary' => $result['summary'],
+            ]);
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('CKPN Kolektif ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -914,8 +934,10 @@ final class SyncCalculationService
             $segmentResult['results'],
         );
 
-        foreach (array_chunk($rows, 500) as $chunk) {
-            DB::table('ckpn_collective_results')->insert($chunk);
+        foreach (array_chunk($rows, 500) as $idx => $chunk) {
+            DB::table('pd_netflow_results')->insert($chunk);
+            $processed = min(($idx + 1) * 500, count($rows));
+            ProgressBroadcastService::updateWithCounter($processed, count($rows), 'Menyimpan hasil PD Netflow...');
             unset($chunk);
         }
         unset($rows);
@@ -962,13 +984,16 @@ final class SyncCalculationService
                 $result['accounts'],
             );
 
-            foreach (array_chunk($rows, 500) as $chunk) {
-                DB::table('ckpn_individual_results')->insert($chunk);
-                unset($chunk);
-            }
+            foreach (array_chunk($rows, 500) as $idx => $chunk) {
+            DB::table('ckpn_collective_results')->insert($chunk);
+            $processed = min(($idx + 1) * 500, count($rows));
+            ProgressBroadcastService::updateWithCounter($processed, count($rows), 'Menyimpan hasil CKPN Kolektif...');
+            unset($chunk);
+        }
             unset($rows);
 
             $runLog->update(['status' => RunStatus::Completed, 'completed_at' => now()]);
+            ProgressBroadcastService::complete('CKPN Individual ' . $calculationPeriod . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -1048,8 +1073,11 @@ final class SyncCalculationService
                 'ckpn_period_id' => $ckpnPeriod->id,
             ])->values()->toArray();
 
-            foreach (array_chunk($rows, 500) as $chunk) {
+            foreach (array_chunk($rows, 500) as $idx => $chunk) {
                 DB::table('ckpn_period_classifications')->insert($chunk);
+                $processed = min(($idx + 1) * 500, count($rows));
+                ProgressBroadcastService::updateWithCounter($processed, count($rows), 'Menyimpan klasifikasi periode...');
+                unset($chunk);
             }
             unset($rows);
 
@@ -1058,6 +1086,7 @@ final class SyncCalculationService
                 'completed_at' => now(),
                 'notes' => sprintf('Populate selesai: %d debitur dimuat dari historis periode %s', $accounts->count(), $period),
             ]);
+            ProgressBroadcastService::complete('Periode debtors ' . $period . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,
@@ -1169,6 +1198,7 @@ final class SyncCalculationService
                     $collectiveCount,
                 ),
             ]);
+            ProgressBroadcastService::complete('Klasifikasi periode ' . $period . ' selesai');
         } catch (Throwable $e) {
             $runLog->update([
                 'status' => RunStatus::Failed,

@@ -121,7 +121,7 @@ class CkpnIndividualResultIndex extends Component
     }
 
     /**
-     * Dispatch CkpnIndividualCalculationJob untuk semua UsageType pada periode terpilih.
+     * Jalankan perhitungan CKPN Individual per segmen (sinkron).
      * Idempotent: skip UsageType yang sedang pending/processing. Ref: AGENTS.md §4
      */
     public function jalankanPerhitungan(): void

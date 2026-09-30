@@ -303,7 +303,7 @@ class CkpnCollectiveResultIndex extends Component
     }
 
     /**
-     * Dispatch CkpnCollectiveCalculationJob per UsageType.
+     * Jalankan perhitungan CKPN Kolektif per UsageType (sinkron).
      * Metode PD dinamis per segmen dari parameter. Idempotent. Ref: AGENTS.md §4
      */
     public function jalankanPerhitungan(): void

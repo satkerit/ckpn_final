@@ -233,5 +233,9 @@
         </div>
     </template>
 </div>
+
+{{-- Global Real-time Progress Bar Component --}}
+<livewire:components.progress-bar />
+
 </body>
 </html>
